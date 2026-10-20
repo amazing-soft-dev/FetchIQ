@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { exportHref, getJob, postJobAction } from "../lib/api";
 import type { Job, JobStatus } from "../lib/types";
@@ -9,10 +10,12 @@ import type { Job, JobStatus } from "../lib/types";
 const ACTIVE: JobStatus[] = ["queued", "running", "paused"];
 
 export function JobPanel({ jobId }: { jobId: string }) {
+  const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [includeNoContact, setIncludeNoContact] = useState(true);
   const [busy, setBusy] = useState(false);
+  const keepError = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -22,10 +25,13 @@ export function JobPanel({ jobId }: { jobId: string }) {
         const next = await getJob(jobId);
         if (!cancelled) {
           setJob(next);
-          setError(null);
+          if (!keepError.current) {
+            setError(null);
+          }
         }
       } catch (reason) {
         if (!cancelled) {
+          keepError.current = false;
           setError(reason instanceof Error ? reason.message : "Could not load the job.");
         }
       }
@@ -43,10 +49,17 @@ export function JobPanel({ jobId }: { jobId: string }) {
 
   async function act(action: "start" | "pause" | "resume" | "cancel") {
     setBusy(true);
+    keepError.current = false;
     setError(null);
     try {
-      setJob(await postJobAction(jobId, action));
+      const next = await postJobAction(jobId, action);
+      if (action === "cancel") {
+        router.push("/");
+        return;
+      }
+      setJob(next);
     } catch (reason) {
+      keepError.current = true;
       setError(reason instanceof Error ? reason.message : "Could not update the job.");
     } finally {
       setBusy(false);
