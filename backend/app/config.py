@@ -1,0 +1,25 @@
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+FORBIDDEN_DATABASES = frozenset({"AIMS_local", "AthensDB", "admin", "config", "local"})
+
+
+class Settings(BaseSettings):
+    """Runtime configuration. Secrets come from the environment, never from the repo."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    mongodb_uri: str = ""
+    github_token: str = ""
+    database_name: str = "fetchiq"
+    github_api_base: str = "https://api.github.com"
+
+    @field_validator("database_name")
+    @classmethod
+    def database_must_be_fetchiq(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned in FORBIDDEN_DATABASES:
+            raise ValueError(f"database {cleaned} is not available to FetchIQ")
+        if not cleaned:
+            raise ValueError("database name is required")
+        return cleaned
