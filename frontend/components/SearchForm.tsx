@@ -4,7 +4,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { createJob, createPreset, getGeo, listPresets, startJob } from "../lib/api";
-import { UNITED_STATES, emptyCriteria, type Preset, type SearchCriteria } from "../lib/types";
+import {
+  UNITED_STATES,
+  emptyCriteria,
+  type AccountAge,
+  type Preset,
+  type SearchCriteria,
+} from "../lib/types";
 import { ChipMultiSelect } from "./ChipMultiSelect";
 
 function ageInMonths(years: number, months: number): number {
@@ -40,11 +46,35 @@ function parseKeywords(value: string): string[] {
     .filter(Boolean);
 }
 
+const AGE_DEFAULTS: AccountAge = emptyCriteria().account_age;
+
+function emptyAgeInputs(): Record<keyof AccountAge, string> {
+  return { min_years: "", min_months: "", max_years: "", max_months: "" };
+}
+
+function parseAgeField(raw: string, fallback: number): number {
+  const text = raw.trim();
+  if (text === "") {
+    return fallback;
+  }
+  return Number(text);
+}
+
+function accountAgeFromInputs(inputs: Record<keyof AccountAge, string>): AccountAge {
+  return {
+    min_years: parseAgeField(inputs.min_years, AGE_DEFAULTS.min_years),
+    min_months: parseAgeField(inputs.min_months, AGE_DEFAULTS.min_months),
+    max_years: parseAgeField(inputs.max_years, AGE_DEFAULTS.max_years),
+    max_months: parseAgeField(inputs.max_months, AGE_DEFAULTS.max_months),
+  };
+}
+
 export function SearchForm() {
   const router = useRouter();
   const [catalog, setCatalog] = useState<{ countries: string[]; us_states: string[] } | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria);
+  const [ageInputs, setAgeInputs] = useState(emptyAgeInputs);
   const [keywordText, setKeywordText] = useState("");
   const [presetName, setPresetName] = useState("");
   const [presetVersion, setPresetVersion] = useState(0);
@@ -77,7 +107,12 @@ export function SearchForm() {
       ...criteria,
       us_states: unitedStatesSelected ? criteria.us_states : [],
       keywords: parseKeywords(keywordText),
+      account_age: accountAgeFromInputs(ageInputs),
     };
+  }
+
+  function setAgeInput(field: keyof AccountAge, value: string) {
+    setAgeInputs((current) => ({ ...current, [field]: value }));
   }
 
   function setCountries(countries: string[]) {
@@ -93,7 +128,14 @@ export function SearchForm() {
   }
 
   function loadPreset(preset: Preset) {
+    const age = preset.criteria.account_age;
     setCriteria(preset.criteria);
+    setAgeInputs({
+      min_years: String(age.min_years),
+      min_months: String(age.min_months),
+      max_years: String(age.max_years),
+      max_months: String(age.max_months),
+    });
     setKeywordText(preset.criteria.keywords.join(", "));
     setPresetVersion((version) => version + 1);
     setError(null);
@@ -145,6 +187,7 @@ export function SearchForm() {
   return (
     <form
       className="panel"
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         void startSearch();
@@ -192,13 +235,9 @@ export function SearchForm() {
               type="number"
               min={0}
               max={100}
-              value={criteria.account_age.min_years}
-              onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, min_years: Number(event.target.value) },
-                }))
-              }
+              placeholder={String(AGE_DEFAULTS.min_years)}
+              value={ageInputs.min_years}
+              onChange={(event) => setAgeInput("min_years", event.target.value)}
             />
           </label>
           <label>
@@ -207,13 +246,9 @@ export function SearchForm() {
               type="number"
               min={0}
               max={11}
-              value={criteria.account_age.min_months}
-              onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, min_months: Number(event.target.value) },
-                }))
-              }
+              placeholder={String(AGE_DEFAULTS.min_months)}
+              value={ageInputs.min_months}
+              onChange={(event) => setAgeInput("min_months", event.target.value)}
             />
           </label>
           <label>
@@ -222,13 +257,9 @@ export function SearchForm() {
               type="number"
               min={0}
               max={100}
-              value={criteria.account_age.max_years}
-              onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, max_years: Number(event.target.value) },
-                }))
-              }
+              placeholder={String(AGE_DEFAULTS.max_years)}
+              value={ageInputs.max_years}
+              onChange={(event) => setAgeInput("max_years", event.target.value)}
             />
           </label>
           <label>
@@ -237,13 +268,9 @@ export function SearchForm() {
               type="number"
               min={0}
               max={11}
-              value={criteria.account_age.max_months}
-              onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, max_months: Number(event.target.value) },
-                }))
-              }
+              placeholder={String(AGE_DEFAULTS.max_months)}
+              value={ageInputs.max_months}
+              onChange={(event) => setAgeInput("max_months", event.target.value)}
             />
           </label>
         </div>

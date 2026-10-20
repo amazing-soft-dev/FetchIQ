@@ -2,9 +2,9 @@
 
 ## Branches
 
-`main` is the only long-lived branch on the remote, and it is the integration target for current work. `dev` was the integration branch for the first feature pull requests and was merged into `main` in pull request #11. That branch is not on the remote now. Do not recreate it unless the team explicitly decides to restore a separate integration branch.
+`dev` is the integration branch. `main` is the release branch. Short-lived branches open into `dev`, and `dev` promotes to `main`.
 
-Use a short-lived branch from the latest `main`:
+Use a short-lived branch from the latest `dev`:
 
 - `feat/<short-description>` for user-facing behavior
 - `fix/<short-description>` for bug fixes
@@ -12,7 +12,7 @@ Use a short-lived branch from the latest `main`:
 - `ci/<short-description>` for workflow changes
 - `build/<short-description>` for dependency and build setup
 
-Open a pull request into `main`. Do not push directly to `main`.
+Open a pull request into `dev`. Do not push directly to `dev` or `main`. After that pull request is merged and checks pass, open a pull request from `dev` into `main` and merge it with a merge commit.
 
 ## Commits
 
@@ -44,7 +44,7 @@ npm run lint
 npm run build
 ```
 
-GitHub Actions runs these same checks on pull requests and pushes to `main` (and to `dev` if that branch exists again). The workflow is [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+GitHub Actions runs these same checks on pull requests and pushes to `dev` and `main`. The workflow is [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 - **Backend:** Python 3.12, install `backend/requirements.txt`, Ruff, pytest against the in-memory database name `fetchiq_test`.
 - **Frontend:** Node 22, `npm ci`, typecheck, lint, and `next build`.
