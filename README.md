@@ -45,6 +45,19 @@ npm run dev
 
 The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
+## Jobs
+
+`POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 pauses the job and keeps the date-window checkpoint. Resume continues from that checkpoint with the same token.
+
+Search criteria:
+
+- `countries`: one or more country names. `United States` can include `us_states`.
+- `account_age`: `min_years`, `min_months`, `max_years`, `max_months`, with min less than or equal to max. The window is UTC calendar arithmetic.
+- `keywords`: optional.
+- `candidate_limit`: stop after this many distinct GitHub user ids.
+
+When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
+
 ## Tests
 
 Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.
