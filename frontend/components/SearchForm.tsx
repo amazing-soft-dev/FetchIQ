@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { createJob, createPreset, getGeo, listPresets, startJob } from "../lib/api";
 import { UNITED_STATES, emptyCriteria, type Preset, type SearchCriteria } from "../lib/types";
+import { ChipMultiSelect } from "./ChipMultiSelect";
 
 function ageInMonths(years: number, months: number): number {
   return years * 12 + months;
@@ -45,9 +46,8 @@ export function SearchForm() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria);
   const [keywordText, setKeywordText] = useState("");
-  const [countryQuery, setCountryQuery] = useState("");
-  const [stateQuery, setStateQuery] = useState("");
   const [presetName, setPresetName] = useState("");
+  const [presetVersion, setPresetVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -70,16 +70,6 @@ export function SearchForm() {
     };
   }, []);
 
-  const filteredCountries = useMemo(() => {
-    const query = countryQuery.trim().toLowerCase();
-    return (catalog?.countries ?? []).filter((country) => country.toLowerCase().includes(query));
-  }, [catalog, countryQuery]);
-
-  const filteredStates = useMemo(() => {
-    const query = stateQuery.trim().toLowerCase();
-    return (catalog?.us_states ?? []).filter((state) => state.toLowerCase().includes(query));
-  }, [catalog, stateQuery]);
-
   const unitedStatesSelected = criteria.countries.includes(UNITED_STATES);
 
   function currentCriteria(): SearchCriteria {
@@ -90,31 +80,22 @@ export function SearchForm() {
     };
   }
 
-  function toggleCountry(country: string) {
-    setCriteria((current) => {
-      const selected = current.countries.includes(country)
-        ? current.countries.filter((item) => item !== country)
-        : [...current.countries, country];
-      return {
-        ...current,
-        countries: selected,
-        us_states: selected.includes(UNITED_STATES) ? current.us_states : [],
-      };
-    });
+  function setCountries(countries: string[]) {
+    setCriteria((current) => ({
+      ...current,
+      countries,
+      us_states: countries.includes(UNITED_STATES) ? current.us_states : [],
+    }));
   }
 
-  function toggleState(state: string) {
-    setCriteria((current) => {
-      const selected = current.us_states.includes(state)
-        ? current.us_states.filter((item) => item !== state)
-        : [...current.us_states, state];
-      return { ...current, us_states: selected };
-    });
+  function setStates(usStates: string[]) {
+    setCriteria((current) => ({ ...current, us_states: usStates }));
   }
 
   function loadPreset(preset: Preset) {
     setCriteria(preset.criteria);
     setKeywordText(preset.criteria.keywords.join(", "));
+    setPresetVersion((version) => version + 1);
     setError(null);
   }
 
@@ -179,52 +160,27 @@ export function SearchForm() {
 
       {error ? <p className="error">{error}</p> : null}
 
-      <fieldset>
-        <legend>Countries</legend>
-        <input
-          type="search"
-          value={countryQuery}
-          placeholder="Filter countries"
-          aria-label="Filter countries"
-          onChange={(event) => setCountryQuery(event.target.value)}
-        />
-        <div className="choice-list" role="group" aria-label="Countries">
-          {filteredCountries.map((country) => (
-            <label key={country}>
-              <input
-                type="checkbox"
-                checked={criteria.countries.includes(country)}
-                onChange={() => toggleCountry(country)}
-              />
-              {country}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <ChipMultiSelect
+        key={`countries-${presetVersion}`}
+        label="Location"
+        helper="Select one or more countries or locations"
+        placeholder="Search and add locations..."
+        options={catalog?.countries ?? []}
+        value={criteria.countries}
+        onChange={setCountries}
+        countNoun="location"
+      />
 
       {unitedStatesSelected ? (
-        <fieldset>
-          <legend>US states</legend>
-          <input
-            type="search"
-            value={stateQuery}
-            placeholder="Filter states"
-            aria-label="Filter US states"
-            onChange={(event) => setStateQuery(event.target.value)}
-          />
-          <div className="choice-list" role="group" aria-label="US states">
-            {filteredStates.map((state) => (
-              <label key={state}>
-                <input
-                  type="checkbox"
-                  checked={criteria.us_states.includes(state)}
-                  onChange={() => toggleState(state)}
-                />
-                {state}
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        <ChipMultiSelect
+          key={`states-${presetVersion}`}
+          label="US states"
+          placeholder="Search and add states..."
+          options={catalog?.us_states ?? []}
+          value={criteria.us_states}
+          onChange={setStates}
+          countNoun="state"
+        />
       ) : null}
 
       <fieldset>
