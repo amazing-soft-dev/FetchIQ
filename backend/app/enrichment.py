@@ -18,6 +18,7 @@ from app.github import RateLimited
 from app.locations import normalize_location
 
 MAX_MATCHING_REPOS = 5
+MAX_README_REPOS = 15
 MAX_README_BYTES = 100_000
 FRESHNESS = timedelta(days=7)
 TWITTER_NAME = re.compile(r"[A-Za-z0-9_]{1,15}\Z")
@@ -239,22 +240,7 @@ class EnrichmentService:
             )
 
     async def _profile_readme(self, login: str) -> tuple[str | None, str | None]:
-        saw_404 = False
-        for ref in ("main", "master"):
-            response = await self.github.get(
-                f"/repos/{login}/{login}/contents/README.md",
-                params={"ref": ref},
-            )
-            if response.status_code == 404:
-                saw_404 = True
-                continue
-            if response.status_code >= 400:
-                return None, None
-            text, source = _decode_readme(response.json(), login, login, ref)
-            return text, source
-        if saw_404:
-            return None, None
-        return None, None
+        return await self._readme(login, login)
 
     async def _matching_repos(
         self,
@@ -263,52 +249,79 @@ class EnrichmentService:
         keywords: list[str],
         emails: list[str],
     ) -> tuple[list[str], list[str], list[str]]:
-        if not keywords:
-            return [], [], []
         response = await self.github.get(
             f"/users/{login}/repos",
             params={"per_page": 100, "type": "owner", "sort": "updated"},
         )
         if response.status_code >= 400:
             return [], [], []
+        owned = [
+            repo
+            for repo in response.json() or []
+            if isinstance(repo, dict)
+            and not repo.get("fork")
+            and not repo.get("archived")
+            and repo.get("name")
+            and repo.get("html_url")
+        ]
+        owned.sort(key=lambda repo: repo.get("pushed_at") or "", reverse=True)
+        owned.sort(key=lambda repo: 0 if _keyword_hits(repo, keywords) else 1)
+
         languages: list[str] = []
         matched: list[str] = []
         urls: list[str] = []
-        for repo in response.json() or []:
-            if not isinstance(repo, dict) or repo.get("fork") or repo.get("archived"):
-                continue
+        email_count = len(emails)
+        scanned = 0
+        for repo in owned:
             hits = _keyword_hits(repo, keywords)
-            if not hits:
+            record_match = bool(hits) and len(urls) < MAX_MATCHING_REPOS
+            scan_readme = scanned < MAX_README_REPOS and (
+                record_match or len(emails) == email_count
+            )
+            if not record_match and not scan_readme:
                 continue
-            if len(urls) >= MAX_MATCHING_REPOS:
-                break
-            name = repo.get("name")
-            html_url = repo.get("html_url")
-            if not name or not html_url:
+            if record_match:
+                language = repo.get("language")
+                if language and language not in languages:
+                    languages.append(language)
+                for hit in hits:
+                    if hit not in matched:
+                        matched.append(hit)
+                urls.append(repo["html_url"])
+            if not scan_readme:
                 continue
-            language = repo.get("language")
-            if language and language not in languages:
-                languages.append(language)
-            for hit in hits:
-                if hit not in matched:
-                    matched.append(hit)
-            urls.append(html_url)
-            readme, source = await self._repo_readme(login, name)
+            scanned += 1
+            readme, source = await self._repo_readme(login, repo["name"])
             if readme and source:
                 await self._store_contacts(github_user_id, readme, source, emails)
         return languages, matched, urls
 
     async def _repo_readme(self, login: str, repo: str) -> tuple[str | None, str | None]:
+        return await self._readme(login, repo)
+
+    async def _readme(self, login: str, repo: str) -> tuple[str | None, str | None]:
+        """Read a public README from the default branch, then main, then master."""
+
+        response = await self.github.get(f"/repos/{login}/{repo}/readme")
+        if response.status_code == 200:
+            payload = response.json()
+            if isinstance(payload, dict):
+                return _decode_readme(payload, login, repo, "HEAD")
+        elif response.status_code >= 400 and response.status_code != 404:
+            return None, None
         for ref in ("main", "master"):
-            response = await self.github.get(
+            contents = await self.github.get(
                 f"/repos/{login}/{repo}/contents/README.md",
                 params={"ref": ref},
             )
-            if response.status_code == 404:
+            if contents.status_code == 404:
                 continue
-            if response.status_code >= 400:
+            if contents.status_code >= 400:
                 return None, None
-            return _decode_readme(response.json(), login, repo, ref)
+            payload = contents.json()
+            if not isinstance(payload, dict):
+                continue
+            return _decode_readme(payload, login, repo, ref)
         return None, None
 
     async def _fresh_copy(self, candidate: dict) -> dict | None:

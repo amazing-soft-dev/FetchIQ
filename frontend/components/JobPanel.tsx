@@ -118,19 +118,26 @@ export function JobPanel({ jobId }: { jobId: string }) {
             ) : null}
           </div>
           {job.counts.discovered > 0 ? (
-            <div className="export-box">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={includeNoContact}
-                  onChange={(event) => setIncludeNoContact(event.target.checked)}
-                />
-                Include rows with no public contact
-              </label>
-              <a className="button" href={exportHref(job.id, includeNoContact)}>
-                Export CSV
-              </a>
-            </div>
+            <>
+              <p className="muted">
+                {job.counts.enriched} of {job.counts.discovered} profiles enriched. Name, location,
+                website, and contacts published in a profile or repository README are filled during
+                enrichment. A download taken before that finishes only lists usernames.
+              </p>
+              <div className="export-box">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={includeNoContact}
+                    onChange={(event) => setIncludeNoContact(event.target.checked)}
+                  />
+                  Include rows with no public contact
+                </label>
+                <a className="button" href={exportHref(job.id, includeNoContact)}>
+                  Export CSV
+                </a>
+              </div>
+            </>
           ) : null}
         </>
       ) : (

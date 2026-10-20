@@ -30,6 +30,17 @@ class JobRunner:
             return
         self._tasks[job_id] = asyncio.create_task(self._run(job_id))
 
+    async def resume_running(self) -> None:
+        """Continue jobs left running when the process stopped before enrichment."""
+
+        cursor = self.db.search_jobs.find({"status": "running"}, {"_id": 1})
+        async for job in cursor:
+            job_id = job["_id"]
+            current = self._tasks.get(job_id)
+            if current is not None and not current.done():
+                continue
+            self._tasks[job_id] = asyncio.create_task(self._run(job_id))
+
     async def _wait_for_budget(self, job_id: str) -> None:
         job = await self.db.search_jobs.find_one({"_id": job_id}, {"request_budget": 1})
         budget = (job or {}).get("request_budget") or {}

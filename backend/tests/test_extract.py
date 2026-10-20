@@ -27,6 +27,14 @@ hidden@example.com
     assert kinds == {"linkedin", "x"}
 
 
+def test_angle_bracket_email_in_readme_is_kept() -> None:
+    found = extract_published_contacts(
+        "To contact me write me at <jscarton@gmail.com>\n\nPortfolio: https://arepasapp.com"
+    )
+    assert found.emails == ["jscarton@gmail.com"]
+    assert ("other_social", "https://arepasapp.com") in found.urls
+
+
 def test_name_and_domain_are_not_combined_into_an_email() -> None:
     found = extract_published_contacts("Ada Lovelace writes at https://example.com")
     assert found.emails == []

@@ -43,6 +43,7 @@ def create_app(
             )
             owns_github = True
         app.state.runner = runner or JobRunner(app.state.db, app.state.github)
+        await app.state.runner.resume_running()
         yield
         if owns_github:
             await app.state.github.aclose()
