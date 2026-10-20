@@ -33,12 +33,29 @@ cp .env.example .env
 
 Set `MONGODB_URI` and `GITHUB_TOKEN` in `.env`. Do not commit that file.
 
-```bash
-cd backend
-python -m pip install -e ".[dev]"
-uvicorn app.main:app --reload
+From the repository root, create a virtual environment and install the backend from `backend/requirements.txt`:
 
-cd ../frontend
+```bash
+python -m venv .venv
+```
+
+Activate it. On Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+On macOS or Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+```bash
+python -m pip install -r backend/requirements.txt
+python -m uvicorn app.main:app --reload --app-dir backend
+
+cd frontend
 npm install
 npm run dev
 ```
@@ -66,11 +83,13 @@ When a slice reports more than 1,000 hits, the job splits the date window. A sli
 
 Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.
 
+With `.venv` activated:
+
 ```bash
 cd backend
-ruff check .
-ruff format --check .
-pytest
+python -m ruff check .
+python -m ruff format --check .
+python -m pytest
 ```
 
 ```bash
