@@ -2,8 +2,12 @@ name: CI
 
 on:
   pull_request:
+    branches: [dev, main]
   push:
     branches: [dev, main]
+
+permissions:
+  contents: read
 
 jobs:
   backend:
@@ -37,6 +41,8 @@ jobs:
         run: python -m pytest
         env:
           DATABASE_NAME: fetchiq_test
+          # backend/ is the working directory. Keep app importable without an editable install.
+          PYTHONPATH: .
 
   frontend:
     name: Frontend
