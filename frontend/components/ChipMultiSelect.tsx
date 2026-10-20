@@ -1,6 +1,15 @@
+
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 
 type ChipMultiSelectProps = {
   label: string;
@@ -29,32 +38,36 @@ export function ChipMultiSelect({
   const listId = useId();
   const helperId = helper ? `${inputId}-helper` : undefined;
   const countId = `${inputId}-count`;
+
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const activeOptionRef = useRef<HTMLLIElement>(null);
-  const valueRef = useRef(value);
+
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  valueRef.current = value;
-
   const suggestions = useMemo(() => {
     const selected = new Set(value);
     const needle = query.trim().toLowerCase();
-    return options.filter((option) => !selected.has(option) && option.toLowerCase().includes(needle));
+
+    return options.filter(
+      (option) =>
+        !selected.has(option) &&
+        option.toLowerCase().includes(needle),
+    );
   }, [options, query, value]);
 
-  const active = suggestions.length === 0 ? -1 : Math.min(activeIndex, suggestions.length - 1);
-
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [query]);
+  const active =
+    suggestions.length === 0
+      ? -1
+      : Math.min(activeIndex, suggestions.length - 1);
 
   useEffect(() => {
     if (!open) {
       return;
     }
+
     activeOptionRef.current?.scrollIntoView({ block: "nearest" });
   }, [active, open, suggestions]);
 
@@ -62,25 +75,26 @@ export function ChipMultiSelect({
     if (!open) {
       return;
     }
+
     function onPointerDown(event: Event) {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false);
       }
     }
+
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
   }, [open]);
 
-  function commit(next: string[]) {
-    valueRef.current = next;
-    onChange(next);
-  }
-
   function add(option: string) {
-    if (valueRef.current.includes(option)) {
+    if (value.includes(option)) {
       return;
     }
-    commit([...valueRef.current, option]);
+
+    onChange([...value, option]);
     setQuery("");
     setActiveIndex(0);
     setOpen(true);
@@ -88,13 +102,14 @@ export function ChipMultiSelect({
   }
 
   function remove(option: string) {
-    commit(valueRef.current.filter((item) => item !== option));
+    onChange(value.filter((item) => item !== option));
     inputRef.current?.focus();
   }
 
   function clearAll() {
-    commit([]);
+    onChange([]);
     setQuery("");
+    setActiveIndex(0);
     inputRef.current?.focus();
   }
 
@@ -102,6 +117,7 @@ export function ChipMultiSelect({
     setActiveIndex((current) => {
       const max = Math.max(suggestions.length - 1, 0);
       const base = Math.min(Math.max(current, 0), max);
+
       return Math.max(0, Math.min(base + delta, max));
     });
   }
@@ -109,49 +125,62 @@ export function ChipMultiSelect({
   function onInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
+
       if (!open) {
         setOpen(true);
         setActiveIndex(0);
         return;
       }
+
       moveActive(1);
       return;
     }
+
     if (event.key === "ArrowUp") {
       event.preventDefault();
+
       if (!open) {
         setOpen(true);
         setActiveIndex(0);
         return;
       }
+
       moveActive(-1);
       return;
     }
+
     if (event.key === "Enter") {
       event.preventDefault();
+
       if (open && active >= 0) {
         add(suggestions[active]);
       }
+
       return;
     }
+
     if (event.key === "Escape") {
       if (open) {
         event.preventDefault();
         setOpen(false);
       }
+
       return;
     }
-    if (event.key === "Backspace" && query === "" && valueRef.current.length > 0) {
+
+    if (event.key === "Backspace" && query === "" && value.length > 0) {
       event.preventDefault();
-      commit(valueRef.current.slice(0, -1));
+      onChange(value.slice(0, -1));
     }
   }
 
   function onBoxPointerDown(event: PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
+
     if (target.closest("button, input")) {
       return;
     }
+
     event.preventDefault();
     inputRef.current?.focus();
   }
@@ -171,11 +200,13 @@ export function ChipMultiSelect({
       <label className="chip-select-label" htmlFor={inputId}>
         {label}
       </label>
+
       {helper ? (
         <p className="chip-select-helper" id={helperId}>
           {helper}
         </p>
       ) : null}
+
       <div className="chip-anchor">
         <div className="chip-box" onPointerDown={onBoxPointerDown}>
           {value.length > 0 ? (
@@ -195,6 +226,7 @@ export function ChipMultiSelect({
               ))}
             </div>
           ) : null}
+
           <input
             id={inputId}
             ref={inputRef}
@@ -204,7 +236,9 @@ export function ChipMultiSelect({
             aria-expanded={open}
             aria-controls={open ? listId : undefined}
             aria-autocomplete="list"
-            aria-activedescendant={open && active >= 0 ? `${listId}-opt-${active}` : undefined}
+            aria-activedescendant={
+              open && active >= 0 ? `${listId}-opt-${active}` : undefined
+            }
             aria-describedby={describedBy}
             autoComplete="off"
             spellCheck={false}
@@ -212,14 +246,21 @@ export function ChipMultiSelect({
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
+              setActiveIndex(0);
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={onInputKeyDown}
           />
         </div>
+
         {open ? (
-          <ul className="chip-suggest" id={listId} role="listbox" aria-label={`${label} suggestions`}>
+          <ul
+            className="chip-suggest"
+            id={listId}
+            role="listbox"
+            aria-label={`${label} suggestions`}
+          >
             {suggestions.length === 0 ? (
               <li className="chip-suggest-empty">No matches</li>
             ) : (
@@ -242,6 +283,7 @@ export function ChipMultiSelect({
           </ul>
         ) : null}
       </div>
+
       <div className="chip-meta">
         <span id={countId}>{selectedLabel(value.length, countNoun)}</span>
         <button type="button" className="chip-clear" onClick={clearAll}>
