@@ -1,13 +1,23 @@
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 FORBIDDEN_DATABASES = frozenset({"AIMS_local", "AthensDB", "admin", "config", "local"})
 
+# pydantic-settings resolves a relative env_file from the process cwd. Uvicorn is
+# started from backend/ and from the repo root, so pin the files to this repo.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILES = (
+    _REPO_ROOT / ".env",
+    _REPO_ROOT / "backend" / ".env",
+)
+
 
 class Settings(BaseSettings):
     """Runtime configuration. Secrets come from the environment, never from the repo."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILES, extra="ignore")
 
     mongodb_uri: str = ""
     github_token: str = ""
