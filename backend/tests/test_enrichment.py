@@ -118,8 +118,10 @@ async def test_enrichment_skips_forks_retries_master_and_keeps_published_email(d
             return _readme("Contact ada@example.com.", ref or "master")
         if path == "/repos/ada/tools/contents/README.md":
             return _readme("Python utilities.", ref or "main")
-        if "/forked/" in path or "/old/" in path or "/notes/" in path:
+        if "/forked/" in path or "/old/" in path:
             raise AssertionError(path)
+        if "/notes/" in path:
+            return httpx.Response(404, json={"message": "Not Found"})
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db)
@@ -143,6 +145,92 @@ async def test_enrichment_skips_forks_retries_master_and_keeps_published_email(d
     assert email["source_url"].endswith("/README.md")
     website = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "website"})
     assert website["normalized_value"] == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_repo_readme_email_is_kept_without_keywords(db) -> None:
+    """A location-only search still reads repository READMEs for a published address."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/users/jscarton":
+            return httpx.Response(
+                200,
+                json=_profile(
+                    email=None,
+                    location="Buenos Aires, Argentina",
+                    bio=None,
+                )
+                | {
+                    "login": "jscarton",
+                    "name": "Juan Scarton",
+                    "blog": "https://arepasapp.com",
+                    "company": None,
+                    "public_repos": 57,
+                },
+            )
+        if path == "/users/jscarton/repos":
+            repos = [
+                {
+                    "name": f"recent-{index}",
+                    "fork": False,
+                    "archived": False,
+                    "language": "Go",
+                    "topics": [],
+                    "html_url": f"https://github.com/jscarton/recent-{index}",
+                    "pushed_at": f"2024-12-{index:02d}T00:00:00Z",
+                }
+                for index in range(1, 12)
+            ]
+            repos.append(
+                {
+                    "name": "arepas-commander",
+                    "fork": False,
+                    "archived": False,
+                    "language": "JavaScript",
+                    "topics": [],
+                    "html_url": "https://github.com/jscarton/arepas-commander",
+                    "pushed_at": "2018-02-25T23:48:28Z",
+                }
+            )
+            repos.append(
+                {
+                    "name": "forked",
+                    "fork": True,
+                    "archived": False,
+                    "language": "JavaScript",
+                    "topics": [],
+                    "html_url": "https://github.com/jscarton/forked",
+                    "pushed_at": "2025-01-01T00:00:00Z",
+                }
+            )
+            return httpx.Response(200, json=repos)
+        if path == "/repos/jscarton/arepas-commander/readme":
+            return _readme("To contact me write me at <jscarton@gmail.com>", "HEAD")
+        if "/forked/" in path:
+            raise AssertionError(path)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job_id, candidate = await _seed(db, keywords=[])
+    await db.candidates.update_one(
+        {"_id": candidate["_id"]},
+        {"$set": {"login": "jscarton", "profile_url": "https://github.com/jscarton"}},
+    )
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    stored = await db.candidates.find_one({"job_id": job_id, "github_user_id": 7})
+    assert stored["name"] == "Juan Scarton"
+    assert stored["country"] == "Argentina"
+    assert stored["public_email"] == "jscarton@gmail.com"
+    assert stored["collection_status"] == "enriched"
+    email = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "email"})
+    assert email["normalized_value"] == "jscarton@gmail.com"
+    assert email["source_url"].endswith("/README.md") or "arepas-commander" in email["source_url"]
+    website = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "website"})
+    assert website["normalized_value"] == "https://arepasapp.com"
 
 
 @pytest.mark.asyncio

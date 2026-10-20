@@ -96,7 +96,10 @@ def extract_published_contacts(text: str) -> PublishedContacts:
     seen_emails: set[str] = set()
     seen_urls: set[tuple[str, str]] = set()
     for token in _walk(_PARSER.parse(text or "")):
-        if token.type in {"fence", "code_block", "code_inline", "html_block", "html_inline"}:
+        if token.type in {"fence", "code_block", "code_inline"}:
+            continue
+        if token.type in {"html_block", "html_inline"}:
+            _harvest_html(found, seen_emails, seen_urls, token.content or "")
             continue
         if token.type == "link_open":
             href = token.attrGet("href") or ""
@@ -111,6 +114,22 @@ def extract_published_contacts(text: str) -> PublishedContacts:
             for url in URL_RE.findall(token.content):
                 _add_url(found, seen_urls, url)
     return found
+
+
+def _harvest_html(
+    found: PublishedContacts,
+    seen_emails: set[str],
+    seen_urls: set[tuple[str, str]],
+    content: str,
+) -> None:
+    """Read addresses published as autolinks or raw HTML, such as ``<name@example.com>``."""
+
+    for match in re.finditer(r"mailto:([^\"'\s>]+)", content, flags=re.IGNORECASE):
+        _add_email(found, seen_emails, match.group(1))
+    for email in EMAIL_RE.findall(content):
+        _add_email(found, seen_emails, email)
+    for url in URL_RE.findall(content):
+        _add_url(found, seen_urls, url)
 
 
 def _add_email(found: PublishedContacts, seen: set[str], value: str) -> None:
