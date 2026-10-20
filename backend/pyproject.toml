@@ -1,3 +1,6 @@
+# Install with: python -m pip install -r requirements.txt
+# Dependency ranges below stay valid for packaging metadata. requirements.txt is the pin file.
+
 [project]
 name = "fetchiq"
 version = "0.1.0"
@@ -33,6 +36,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
