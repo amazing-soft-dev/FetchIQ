@@ -6,25 +6,47 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings
 from app.db import connect, ensure_indexes
+from app.github import GitHubClient
+from app.routes.jobs import router as jobs_router
+from app.runner import JobRunner
 
 
-def create_app(settings: Settings | None = None, db=None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    db=None,
+    github: GitHubClient | None = None,
+    runner: JobRunner | None = None,
+) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
+        owns_client = False
+        owns_github = False
         if db is not None:
             await ensure_indexes(db)
             app.state.db = db
             app.state.mongo_client = None
-            yield
-            return
-        client, database = await connect(settings)
-        app.state.mongo_client = client
-        app.state.db = database
+        else:
+            client, database = await connect(settings)
+            owns_client = True
+            app.state.mongo_client = client
+            app.state.db = database
+        if github is not None:
+            app.state.github = github
+        else:
+            app.state.github = GitHubClient(
+                settings.github_token,
+                base_url=settings.github_api_base,
+            )
+            owns_github = True
+        app.state.runner = runner or JobRunner(app.state.db, app.state.github)
         yield
-        client.close()
+        if owns_github:
+            await app.state.github.aclose()
+        if owns_client and app.state.mongo_client is not None:
+            app.state.mongo_client.close()
 
     app = FastAPI(title="FetchIQ", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
@@ -34,6 +56,7 @@ def create_app(settings: Settings | None = None, db=None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(jobs_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

@@ -1,0 +1,364 @@
+import re
+from datetime import date
+
+import httpx
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.config import Settings
+from app.discovery import DiscoveryService, build_user_query, new_job_document, upsert_candidate
+from app.github import GitHubClient
+from app.main import create_app
+from app.models import AccountAge, SearchCriteria
+from app.runner import JobRunner
+
+CREATED = re.compile(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})")
+
+
+def _criteria(**overrides) -> dict:
+    document = {
+        "countries": ["Germany"],
+        "us_states": [],
+        "account_age": {"min_years": 0, "min_months": 0, "max_years": 0, "max_months": 0},
+        "keywords": [],
+        "candidate_limit": 50,
+    }
+    document.update(overrides)
+    return document
+
+
+def _user(user_id: int, login: str | None = None) -> dict:
+    name = login or f"user{user_id}"
+    return {"id": user_id, "login": name, "html_url": f"https://github.com/{name}"}
+
+
+def _span(query: str) -> int:
+    match = CREATED.search(query)
+    assert match is not None
+    start = date.fromisoformat(match.group(1))
+    end = date.fromisoformat(match.group(2))
+    return (end - start).days
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _stack(db, handler, sleeper=_no_sleep):
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    runner = JobRunner(db, github, sleeper=sleeper)
+    app = create_app(
+        settings=Settings(database_name="fetchiq_test", github_token="test-token"),
+        db=db,
+        github=github,
+        runner=runner,
+    )
+    return app, runner, github
+
+
+async def _create_and_run(db, handler, criteria: dict | None = None):
+    app, runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": criteria or _criteria()})
+            assert created.status_code == 201
+            job_id = created.json()["id"]
+            started = await client.post(f"/api/jobs/{job_id}/start")
+            assert started.status_code == 200
+            await runner._tasks[job_id]
+            payload = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+    return job_id, payload, runner
+
+
+def test_query_seeds_location_created_window_and_keywords() -> None:
+    criteria = SearchCriteria(
+        countries=["Germany", "USA"],
+        us_states=["OR", "Texas"],
+        account_age=AccountAge(min_years=1, min_months=0, max_years=2, max_months=0),
+        keywords=["python", "web assembly"],
+        candidate_limit=10,
+    )
+    query = build_user_query(criteria, date(2022, 1, 31), date(2023, 1, 31))
+    assert 'location:"Oregon"' in query
+    assert 'location:"Texas"' in query
+    assert 'location:"United States"' not in query
+    assert 'location:"Germany"' in query
+    assert "created:2022-01-31..2023-01-31" in query
+    assert "type:user" in query
+    assert "python" in query
+    assert '"web assembly"' in query
+
+
+def test_criteria_rejects_reversed_age_unknown_places_and_states_without_us() -> None:
+    with pytest.raises(ValueError, match="less than or equal"):
+        SearchCriteria(
+            countries=["Germany"],
+            account_age=AccountAge(min_years=3, min_months=0, max_years=1, max_months=0),
+        )
+    with pytest.raises(ValueError, match="unknown country"):
+        SearchCriteria(countries=["Atlantis"])
+    with pytest.raises(ValueError, match="US states require United States"):
+        SearchCriteria(countries=["Germany"], us_states=["Oregon"])
+    with pytest.raises(ValueError, match="select at least one country"):
+        SearchCriteria(countries=[])
+
+
+@pytest.mark.asyncio
+async def test_upsert_dedup_uses_job_and_github_user_id(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(job)
+    first = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    second = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    assert first == "inserted"
+    assert second == "already_stored"
+    assert await db.candidates.count_documents({"job_id": job["_id"]}) == 1
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["counts"]["discovered"] == 1
+
+    other = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(other)
+    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "inserted"
+    assert await db.candidates.count_documents({"github_user_id": 7}) == 2
+
+
+@pytest.mark.asyncio
+async def test_over_1000_results_split_into_narrower_windows(db) -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        span = _span(request.url.params["q"])
+        calls.append(span)
+        if span > 40:
+            return httpx.Response(200, json={"total_count": 1500, "items": []})
+        start = CREATED.search(request.url.params["q"]).group(1).replace("-", "")
+        return httpx.Response(
+            200,
+            json={"total_count": 1, "items": [_user(int(start))]},
+        )
+
+    criteria = SearchCriteria(
+        countries=["Germany"],
+        account_age=AccountAge(min_years=0, min_months=0, max_years=1, max_months=0),
+        candidate_limit=100,
+    )
+    job = new_job_document(criteria)
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+
+    assert outcome == "done"
+    assert calls[0] > 40
+    assert any(span <= 40 for span in calls)
+    assert all(span < calls[0] for span in calls[1:])
+    count = await db.candidates.count_documents({"job_id": job["_id"]})
+    assert count >= 2
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["counts"]["discovered"] == count
+    assert stored["incomplete"] is False
+
+
+@pytest.mark.asyncio
+async def test_split_windows_do_not_insert_the_same_user_twice(db) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        span = _span(request.url.params["q"])
+        if span > 40:
+            return httpx.Response(200, json={"total_count": 2000, "items": []})
+        return httpx.Response(200, json={"total_count": 1, "items": [_user(42, "octocat")]})
+
+    criteria = SearchCriteria(
+        countries=["Germany"],
+        account_age=AccountAge(min_years=0, min_months=0, max_years=1, max_months=0),
+        candidate_limit=100,
+    )
+    job = new_job_document(criteria)
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert await db.candidates.count_documents({"job_id": job["_id"], "github_user_id": 42}) == 1
+
+
+@pytest.mark.asyncio
+async def test_single_day_over_1000_is_flagged_incomplete(db) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"total_count": 1001, "items": [_user(3, "ada")]})
+
+    _job_id, payload, _runner = await _create_and_run(db, handler)
+    assert payload["status"] == "incomplete"
+    assert "single-day window exceeded 1000 results" in payload["incomplete_reasons"]
+    assert payload["counts"]["discovered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pagination_follows_the_link_header(db) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("page", "1"))
+        item = _user(page, f"user{page}")
+        if page == 1:
+            params = dict(request.url.params)
+            params["page"] = "2"
+            next_url = request.url.copy_with(params=params)
+            return httpx.Response(
+                200,
+                headers={"Link": f'<{next_url}>; rel="next"'},
+                json={"total_count": 2, "items": [item]},
+            )
+        return httpx.Response(200, json={"total_count": 2, "items": [item]})
+
+    _job_id, payload, _runner = await _create_and_run(db, handler)
+    assert payload["status"] == "succeeded"
+    assert payload["counts"]["discovered"] == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_page_stops_and_flags_incomplete(db) -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(
+            200,
+            headers={"Link": f'<{request.url}>; rel="next"'},
+            json={"total_count": 1, "items": [_user(5, "ada")]},
+        )
+
+    _job_id, payload, _runner = await _create_and_run(db, handler)
+    assert calls["count"] == 1
+    assert payload["status"] == "incomplete"
+    assert "repeated page" in payload["incomplete_reasons"]
+    assert payload["counts"]["discovered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pagination_cap_flags_incomplete(db) -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        page = int(request.url.params.get("page", "1"))
+        params = dict(request.url.params)
+        params["page"] = str(page + 1)
+        next_url = request.url.copy_with(params=params)
+        return httpx.Response(
+            200,
+            headers={"Link": f'<{next_url}>; rel="next"'},
+            json={"total_count": 50, "items": [_user(page, f"user{page}")]},
+        )
+
+    _job_id, payload, _runner = await _create_and_run(db, handler)
+    assert calls["count"] == 10
+    assert payload["status"] == "incomplete"
+    assert "pagination cap" in payload["incomplete_reasons"]
+    assert payload["counts"]["discovered"] == 10
+
+
+@pytest.mark.asyncio
+async def test_resume_after_simulated_429(db) -> None:
+    calls = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(
+                429,
+                headers={
+                    "Retry-After": "0",
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Limit": "30",
+                },
+                json={"message": "API rate limit exceeded"},
+            )
+        return httpx.Response(200, json={"total_count": 1, "items": [_user(99, "octocat")]})
+
+    app, runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            paused = (await client.get(f"/api/jobs/{job_id}")).json()
+            assert paused["status"] == "paused"
+            assert paused["counts"]["discovered"] == 0
+            assert paused["request_budget"]["retry_after_seconds"] == 0
+            checkpoint = await db.search_jobs.find_one({"_id": job_id})
+            assert checkpoint["checkpoint"]["windows"]
+            events = await db.job_events.find({"job_id": job_id, "kind": "rate_limited"}).to_list(
+                None
+            )
+            assert len(events) == 1
+
+            resumed = await client.post(f"/api/jobs/{job_id}/resume")
+            assert resumed.status_code == 200
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+
+    assert calls["count"] == 2
+    assert finished["status"] == "succeeded"
+    assert finished["counts"]["discovered"] == 1
+    assert await db.candidates.count_documents({"job_id": job_id, "github_user_id": 99}) == 1
+
+
+@pytest.mark.asyncio
+async def test_pause_stops_after_the_current_page(db) -> None:
+    calls = {"count": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            params = dict(request.url.params)
+            params["page"] = "2"
+            next_url = request.url.copy_with(params=params)
+            job = await db.search_jobs.find_one({})
+            await db.search_jobs.update_one({"_id": job["_id"]}, {"$set": {"control": "pause"}})
+            return httpx.Response(
+                200,
+                headers={"Link": f'<{next_url}>; rel="next"'},
+                json={"total_count": 2, "items": [_user(1, "ada")]},
+            )
+        return httpx.Response(200, json={"total_count": 2, "items": [_user(2, "grace")]})
+
+    app, runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            paused = (await client.get(f"/api/jobs/{job_id}")).json()
+            assert paused["status"] == "paused"
+            assert paused["counts"]["discovered"] == 1
+            assert calls["count"] == 1
+
+            await client.post(f"/api/jobs/{job_id}/resume")
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+    assert calls["count"] == 2
+    assert finished["status"] == "succeeded"
+    assert finished["counts"]["discovered"] == 2
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_job(db) -> None:
+    app, _runner, github = _stack(
+        db,
+        lambda _request: httpx.Response(500, json={"message": "should not be called"}),
+    )
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            cancelled = await client.post(f"/api/jobs/{job_id}/cancel")
+            assert cancelled.status_code == 200
+            assert cancelled.json()["status"] == "cancelled"
+            rejected = await client.post(f"/api/jobs/{job_id}/start")
+            assert rejected.status_code == 409
+    await github.aclose()
