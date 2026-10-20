@@ -140,7 +140,8 @@ class DiscoveryService:
             raise KeyError(job_id)
         criteria = SearchCriteria.model_validate(job["criteria"])
         checkpoint = job.get("checkpoint")
-        if checkpoint and checkpoint.get("phase") == "discovery_done":
+        phase = (checkpoint or {}).get("phase")
+        if phase in {"discovery_done", "enrichment", "enrichment_done"}:
             return "done"
         if not checkpoint or not checkpoint.get("windows"):
             start, end = account_age_window(

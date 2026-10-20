@@ -4,6 +4,7 @@ import asyncio
 
 from app.db import utcnow
 from app.discovery import DiscoveryService
+from app.enrichment import EnrichmentService
 from app.github import GitHubClient
 
 
@@ -50,6 +51,10 @@ class JobRunner:
         try:
             await self._wait_for_budget(job_id)
             outcome = await DiscoveryService(self.db, self.github).run(job_id)
+            if outcome != "done":
+                return
+            await self._wait_for_budget(job_id)
+            outcome = await EnrichmentService(self.db, self.github).run(job_id)
             if outcome != "done":
                 return
             job = await self.db.search_jobs.find_one({"_id": job_id}, {"incomplete": 1})
