@@ -79,6 +79,10 @@ When a slice reports more than 1,000 hits, the job splits the date window. A sli
 
 `GET /api/jobs/{id}/export.csv` streams UTF-8 CSV. One row is emitted per GitHub user id. `include_no_contact=false` omits rows with no public contact. Cells that start with `=`, `+`, `-`, or `@` are prefixed so a spreadsheet does not treat them as formulas.
 
+## Branches
+
+`dev` is the long-lived integration branch. Open `feat/*`, `fix/*`, and `ci/*` pull requests against `dev`, and merge them with a merge commit. Promote `dev` to `main` with a second pull request. Do not delete `dev` after that promotion. CI runs on pull requests to `dev` and `main`, and on pushes to those branches.
+
 ## Tests
 
 Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.
