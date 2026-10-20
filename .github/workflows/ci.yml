@@ -31,10 +31,10 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Ruff
-        run: ruff check . && ruff format --check .
+        run: python -m ruff check . && python -m ruff format --check .
 
       - name: Pytest
-        run: pytest
+        run: python -m pytest
         env:
           DATABASE_NAME: fetchiq_test
 
