@@ -2,11 +2,13 @@
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.db import utcnow
 from app.discovery import new_job_document
+from app.export import stream_job_csv
 from app.models import SearchCriteria
 
 router = APIRouter(prefix="/api")
@@ -64,6 +66,25 @@ async def create_job(body: JobCreate, request: Request) -> dict:
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, request: Request) -> dict:
     return public_job(await _load(request.app.state.db, job_id))
+
+
+@router.get("/jobs/{job_id}/export.csv")
+async def export_job_csv(
+    job_id: str,
+    request: Request,
+    include_no_contact: bool = Query(default=True),
+) -> StreamingResponse:
+    await _load(request.app.state.db, job_id)
+    filename = f'attachment; filename="fetchiq-{job_id}.csv"'
+    return StreamingResponse(
+        stream_job_csv(
+            request.app.state.db,
+            job_id,
+            include_no_contact=include_no_contact,
+        ),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": filename},
+    )
 
 
 @router.post("/jobs/{job_id}/start")

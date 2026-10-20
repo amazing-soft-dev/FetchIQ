@@ -60,6 +60,8 @@ Search criteria:
 
 When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
 
+`GET /api/jobs/{id}/export.csv` streams UTF-8 CSV. One row is emitted per GitHub user id. `include_no_contact=false` omits rows with no public contact. Cells that start with `=`, `+`, `-`, or `@` are prefixed so a spreadsheet does not treat them as formulas.
+
 ## Tests
 
 Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.
