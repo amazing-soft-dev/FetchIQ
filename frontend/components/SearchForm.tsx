@@ -11,20 +11,66 @@ function ageInMonths(years: number, months: number): number {
   return years * 12 + months;
 }
 
+type AgeField = "min_years" | "min_months" | "max_years" | "max_months";
+
+type AgeDraft = Record<AgeField, string>;
+
+const AGE_DEFAULTS: Record<AgeField, number> = {
+  min_years: 0,
+  min_months: 0,
+  max_years: 5,
+  max_months: 0,
+};
+
+const AGE_LIMITS: Record<AgeField, number> = {
+  min_years: 100,
+  min_months: 11,
+  max_years: 100,
+  max_months: 11,
+};
+
+const EMPTY_AGE_DRAFT: AgeDraft = {
+  min_years: "",
+  min_months: "",
+  max_years: "",
+  max_months: "",
+};
+
+function ageDraftFrom(age: SearchCriteria["account_age"]): AgeDraft {
+  return {
+    min_years: String(age.min_years),
+    min_months: String(age.min_months),
+    max_years: String(age.max_years),
+    max_months: String(age.max_months),
+  };
+}
+
+function parseAge(draft: AgeDraft): { error: string } | { age: SearchCriteria["account_age"] } {
+  const age = { ...AGE_DEFAULTS };
+  for (const key of Object.keys(AGE_DEFAULTS) as AgeField[]) {
+    const text = draft[key].trim();
+    if (text === "") {
+      age[key] = AGE_DEFAULTS[key];
+      continue;
+    }
+    if (!/^\d+$/.test(text)) {
+      return { error: "Account age must be a whole number of years and months." };
+    }
+    const value = Number(text);
+    if (value > AGE_LIMITS[key]) {
+      return { error: "Years must be 0 to 100 and months must be 0 to 11." };
+    }
+    age[key] = value;
+  }
+  if (ageInMonths(age.min_years, age.min_months) > ageInMonths(age.max_years, age.max_months)) {
+    return { error: "Minimum account age must be less than or equal to the maximum." };
+  }
+  return { age };
+}
+
 function criteriaError(criteria: SearchCriteria): string | null {
   if (criteria.countries.length === 0) {
     return "Select at least one country.";
-  }
-  const age = criteria.account_age;
-  const fields = [age.min_years, age.min_months, age.max_years, age.max_months];
-  if (fields.some((value) => !Number.isInteger(value) || value < 0)) {
-    return "Account age must be a whole number of years and months.";
-  }
-  if (age.min_months > 11 || age.max_months > 11 || age.min_years > 100 || age.max_years > 100) {
-    return "Years must be 0 to 100 and months must be 0 to 11.";
-  }
-  if (ageInMonths(age.min_years, age.min_months) > ageInMonths(age.max_years, age.max_months)) {
-    return "Minimum account age must be less than or equal to the maximum.";
   }
   const limit = criteria.candidate_limit;
   if (!Number.isInteger(limit) || limit < 1 || limit > 5000) {
@@ -45,6 +91,7 @@ export function SearchForm() {
   const [catalog, setCatalog] = useState<{ countries: string[]; us_states: string[] } | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria);
+  const [ageDraft, setAgeDraft] = useState<AgeDraft>(EMPTY_AGE_DRAFT);
   const [keywordText, setKeywordText] = useState("");
   const [presetName, setPresetName] = useState("");
   const [presetVersion, setPresetVersion] = useState(0);
@@ -72,12 +119,26 @@ export function SearchForm() {
 
   const unitedStatesSelected = criteria.countries.includes(UNITED_STATES);
 
-  function currentCriteria(): SearchCriteria {
+  function currentCriteria(age: SearchCriteria["account_age"]): SearchCriteria {
     return {
       ...criteria,
+      account_age: age,
       us_states: unitedStatesSelected ? criteria.us_states : [],
       keywords: parseKeywords(keywordText),
     };
+  }
+
+  function readyCriteria(): { error: string } | { criteria: SearchCriteria } {
+    const parsed = parseAge(ageDraft);
+    if ("error" in parsed) {
+      return parsed;
+    }
+    const next = currentCriteria(parsed.age);
+    const problem = criteriaError(next);
+    if (problem) {
+      return { error: problem };
+    }
+    return { criteria: next };
   }
 
   function setCountries(countries: string[]) {
@@ -94,18 +155,19 @@ export function SearchForm() {
 
   function loadPreset(preset: Preset) {
     setCriteria(preset.criteria);
+    setAgeDraft(ageDraftFrom(preset.criteria.account_age));
     setKeywordText(preset.criteria.keywords.join(", "));
     setPresetVersion((version) => version + 1);
     setError(null);
   }
 
   async function savePreset() {
-    const next = currentCriteria();
-    const problem = criteriaError(next);
-    if (problem) {
-      setError(problem);
+    const ready = readyCriteria();
+    if ("error" in ready) {
+      setError(ready.error);
       return;
     }
+    const next = ready.criteria;
     if (!presetName.trim()) {
       setError("Name the preset before saving it.");
       return;
@@ -124,12 +186,12 @@ export function SearchForm() {
   }
 
   async function startSearch() {
-    const next = currentCriteria();
-    const problem = criteriaError(next);
-    if (problem) {
-      setError(problem);
+    const ready = readyCriteria();
+    if ("error" in ready) {
+      setError(ready.error);
       return;
     }
+    const next = ready.criteria;
     setBusy(true);
     setError(null);
     try {
@@ -192,12 +254,10 @@ export function SearchForm() {
               type="number"
               min={0}
               max={100}
-              value={criteria.account_age.min_years}
+              placeholder="0"
+              value={ageDraft.min_years}
               onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, min_years: Number(event.target.value) },
-                }))
+                setAgeDraft((current) => ({ ...current, min_years: event.target.value }))
               }
             />
           </label>
@@ -207,12 +267,10 @@ export function SearchForm() {
               type="number"
               min={0}
               max={11}
-              value={criteria.account_age.min_months}
+              placeholder="0"
+              value={ageDraft.min_months}
               onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, min_months: Number(event.target.value) },
-                }))
+                setAgeDraft((current) => ({ ...current, min_months: event.target.value }))
               }
             />
           </label>
@@ -222,12 +280,10 @@ export function SearchForm() {
               type="number"
               min={0}
               max={100}
-              value={criteria.account_age.max_years}
+              placeholder="5"
+              value={ageDraft.max_years}
               onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, max_years: Number(event.target.value) },
-                }))
+                setAgeDraft((current) => ({ ...current, max_years: event.target.value }))
               }
             />
           </label>
@@ -237,12 +293,10 @@ export function SearchForm() {
               type="number"
               min={0}
               max={11}
-              value={criteria.account_age.max_months}
+              placeholder="0"
+              value={ageDraft.max_months}
               onChange={(event) =>
-                setCriteria((current) => ({
-                  ...current,
-                  account_age: { ...current.account_age, max_months: Number(event.target.value) },
-                }))
+                setAgeDraft((current) => ({ ...current, max_months: event.target.value }))
               }
             />
           </label>

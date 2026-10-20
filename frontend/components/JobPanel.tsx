@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { exportHref, getJob, postJobAction } from "../lib/api";
@@ -9,6 +10,7 @@ import type { Job, JobStatus } from "../lib/types";
 const ACTIVE: JobStatus[] = ["queued", "running", "paused"];
 
 export function JobPanel({ jobId }: { jobId: string }) {
+  const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [includeNoContact, setIncludeNoContact] = useState(true);
@@ -45,7 +47,12 @@ export function JobPanel({ jobId }: { jobId: string }) {
     setBusy(true);
     setError(null);
     try {
-      setJob(await postJobAction(jobId, action));
+      const next = await postJobAction(jobId, action);
+      if (action === "cancel") {
+        router.push("/");
+        return;
+      }
+      setJob(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not update the job.");
     } finally {
