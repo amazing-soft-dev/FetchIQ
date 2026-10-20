@@ -56,6 +56,8 @@ Search criteria:
 - `keywords`: optional.
 - `candidate_limit`: stop after this many distinct GitHub user ids.
 
+`GET /api/geo` lists countries and US states for the search form. `POST /api/presets` saves the same criteria for a later run.
+
 When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
 
 ## Tests
