@@ -102,6 +102,26 @@ async def test_server_errors_use_exponential_backoff() -> None:
 
 
 @pytest.mark.asyncio
+async def test_html_fetch_overrides_accept_and_uses_the_profile_url() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers["accept"]))
+        return httpx.Response(200, text="<html></html>")
+
+    client = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    html = await client.get_html("https://github.com/octocat")
+    api = await client.get("/users/octocat")
+    await client.aclose()
+
+    assert html.status_code == 200
+    assert api.status_code == 200
+    assert seen[0] == ("https://github.com/octocat", "text/html")
+    assert seen[1][0].endswith("/users/octocat")
+    assert seen[1][1] == "application/vnd.github+json"
+
+
+@pytest.mark.asyncio
 async def test_missing_token_does_not_call_github() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("request should not be sent")

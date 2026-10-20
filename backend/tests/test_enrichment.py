@@ -3,8 +3,15 @@ import base64
 import httpx
 import pytest
 
+from app.db import utcnow
 from app.discovery import new_job_document
-from app.enrichment import EnrichmentService
+from app.enrichment import (
+    EnrichmentService,
+    format_utc_offset,
+    parse_profile_emails,
+    parse_utc_offset,
+)
+from app.export import build_row
 from app.github import GitHubClient
 from app.models import SearchCriteria
 
@@ -284,5 +291,107 @@ async def test_profile_api_email_is_stored_and_noreply_is_ignored(db) -> None:
     stored = await db.candidates.find_one({"github_user_id": 7})
     assert stored["public_email"] == "Ada@example.com"
     assert stored["country"] == "Germany"
+    assert stored["utc_offset"] is None
     emails = await db.contact_evidence.find({"kind": "email"}).to_list(10)
     assert [item["normalized_value"] for item in emails] == ["Ada@example.com"]
+
+
+def test_utc_offset_formats_half_hours() -> None:
+    assert format_utc_offset(-3.0) == "-03:00"
+    assert format_utc_offset(5.5) == "+05:30"
+    assert format_utc_offset(0) == "+00:00"
+    assert format_utc_offset(14) == "+14:00"
+    assert format_utc_offset(20) is None
+    html = '<profile-timezone data-hours-ahead-of-utc="-3.0">(UTC -03:00)</profile-timezone>'
+    assert parse_utc_offset(html) == "-03:00"
+    assert parse_utc_offset('<profile-timezone data-hours-ahead-of-utc="5.5">') == "+05:30"
+    page = (
+        '<a href="mailto:Ada@Example.com">mail</a>'
+        '<span itemprop="email">other@example.com</span>'
+        "<p>hidden@example.com</p>"
+        '<a href="mailto:ada@users.noreply.github.com">noreply</a>'
+    )
+    assert parse_profile_emails(page) == ["Ada@example.com", "other@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_profile_html_stores_offset_and_keeps_api_email_primary(db) -> None:
+    html = """
+    <profile-timezone data-hours-ahead-of-utc="5.5"></profile-timezone>
+    <a href="mailto:other@example.com">other</a>
+    <span itemprop="email">third@example.com</span>
+    <p>not-published@example.com</p>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        assert ".patch" not in path
+        assert "/commits" not in path
+        if request.headers.get("accept") == "text/html":
+            return httpx.Response(200, text=html)
+        if path == "/users/ada":
+            return httpx.Response(
+                200,
+                json=_profile(email="Ada@Example.com", location="Brazil"),
+            )
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job_id, _candidate = await _seed(db, keywords=[])
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    stored = await db.candidates.find_one({"github_user_id": 7})
+    assert stored["name"] == "Ada Lovelace"
+    assert stored["country"] == "Brazil"
+    assert stored["utc_offset"] == "+05:30"
+    assert stored["public_email"] == "Ada@example.com"
+    evidence = await db.contact_evidence.find({"github_user_id": 7, "kind": "email"}).to_list(10)
+    assert {item["normalized_value"] for item in evidence} == {
+        "Ada@example.com",
+        "other@example.com",
+        "third@example.com",
+    }
+    assert all(item["source_url"] == "https://github.com/ada" for item in evidence)
+    assert "not-published@example.com" not in {item["normalized_value"] for item in evidence}
+    row = build_row(stored, evidence)
+    assert row["public_email"] == "Ada@example.com"
+    assert row["utc_offset"] == "+05:30"
+
+
+@pytest.mark.asyncio
+async def test_recent_profile_copies_utc_offset(db) -> None:
+    job_id, _candidate = await _seed(db, keywords=[])
+    other = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(other)
+    await db.candidates.insert_one(
+        {
+            "job_id": other["_id"],
+            "github_user_id": 7,
+            "login": "ada",
+            "profile_url": "https://github.com/ada",
+            "enrichment_status": "enriched",
+            "collection_status": "enriched",
+            "last_checked_at": utcnow(),
+            "name": "Ada Lovelace",
+            "public_email": "ada@example.com",
+            "country": "Brazil",
+            "utc_offset": "-03:00",
+            "location_raw": "Brazil",
+        }
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a fresh profile is copied without another fetch")
+
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    stored = await db.candidates.find_one({"job_id": job_id, "github_user_id": 7})
+    assert stored["utc_offset"] == "-03:00"
+    assert stored["name"] == "Ada Lovelace"
+    assert stored["country"] == "Brazil"
+    assert stored["public_email"] == "ada@example.com"

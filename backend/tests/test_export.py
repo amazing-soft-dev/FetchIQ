@@ -54,6 +54,7 @@ def test_row_includes_provenance_and_selected_contacts() -> None:
         "bio": None,
         "company": "Engines",
         "country": "Germany",
+        "utc_offset": "-03:00",
         "us_state": None,
         "github_created_at": "2020-06-01T00:00:00Z",
         "public_repos_count": 3,
@@ -89,7 +90,9 @@ def test_row_includes_provenance_and_selected_contacts() -> None:
     ]
     row = build_row(candidate, evidence)
     assert list(row) == COLUMNS
+    assert COLUMNS[COLUMNS.index("country") + 1] == "utc_offset"
     assert row["name"] == "=Ada"
+    assert row["utc_offset"] == "-03:00"
     assert row["bio"] == ""
     assert row["public_email"] == "ada@example.com"
     assert row["email_source_url"].endswith("README.md")
@@ -114,6 +117,7 @@ async def test_export_endpoint_sanitizes_and_filters_empty_contacts(db) -> None:
                 "login": "ada",
                 "profile_url": "https://github.com/ada",
                 "name": "=Ada",
+                "utc_offset": "-03:00",
                 "collection_status": "enriched",
                 "last_checked_at": checked,
                 "enrichment_status": "enriched",
@@ -155,14 +159,17 @@ async def test_export_endpoint_sanitizes_and_filters_empty_contacts(db) -> None:
     assert full.content.startswith(b"github_username,")
     rows = list(csv.reader(full.text.splitlines()))
     assert rows[0] == COLUMNS
+    assert rows[0][rows[0].index("country") + 1] == "utc_offset"
     assert len(rows) == 3
     ada = dict(zip(COLUMNS, rows[1], strict=True))
     assert ada["github_username"] == "ada"
     assert ada["name"] == "'=Ada"
+    assert ada["utc_offset"] == "'-03:00"
     assert ada["public_email"] == "ada@example.com"
     assert ada["email_source_url"] == "https://github.com/ada"
     grace = dict(zip(COLUMNS, rows[2], strict=True))
     assert grace["public_email"] == ""
+    assert grace["utc_offset"] == ""
     assert grace["bio"] == ""
 
     filtered_rows = list(csv.reader(filtered.text.splitlines()))
