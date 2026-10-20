@@ -7,6 +7,8 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+RATE_LIMIT_STEP_SECONDS = 1.0
+
 
 class RateLimited(Exception):
     def __init__(
@@ -115,6 +117,38 @@ def read_budget(response: httpx.Response) -> RateBudget:
     )
 
 
+def rate_limit_budget(exc: RateLimited, *, seconds_left: float) -> dict:
+    """Budget stored while a job waits. Cleared once the wait finishes."""
+
+    waiting = seconds_left > 0
+    return {
+        "limit": exc.limit,
+        "remaining": exc.remaining,
+        "reset_at": exc.reset_at if waiting else None,
+        "retry_after_seconds": seconds_left if waiting else None,
+    }
+
+
+async def wait_out_rate_limit(seconds: float, sleeper, stopped) -> tuple[str | None, float]:
+    """Sleep in short steps until the limit resets or the user stops the job.
+
+    ``stopped`` is an async callable that returns ``"paused"`` or ``"cancelled"``
+    when the user asked to stop, and ``None`` otherwise. The second value is the
+    wait still remaining.
+    """
+
+    remaining = max(0.0, float(seconds))
+    while True:
+        reason = await stopped()
+        if reason:
+            return reason, remaining
+        if remaining <= 0:
+            return None, 0.0
+        step = min(RATE_LIMIT_STEP_SECONDS, remaining)
+        await sleeper(step)
+        remaining = max(0.0, remaining - step)
+
+
 class GitHubClient:
     """HTTP client bound to the single token from the environment."""
 
@@ -146,13 +180,19 @@ class GitHubClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def get(self, url: str, params: dict | None = None) -> httpx.Response:
+    async def get(
+        self,
+        url: str,
+        params: dict | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
         if not self._token:
             raise RuntimeError("GITHUB_TOKEN is required")
         attempt = 0
         delay = 1.0
         while True:
-            response = await self._client.get(url, params=params)
+            response = await self._client.get(url, params=params, headers=headers)
             if is_rate_limited(response):
                 raise RateLimited(
                     retry_after=retry_after_seconds(response, attempt),
@@ -166,3 +206,8 @@ class GitHubClient:
                 delay = min(delay * 2, 30.0)
                 continue
             return response
+
+    async def get_html(self, url: str) -> httpx.Response:
+        """Fetch a public profile page. Overrides the API Accept header."""
+
+        return await self.get(url, headers={"Accept": "text/html"})

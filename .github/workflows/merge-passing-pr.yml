@@ -1,0 +1,37 @@
+name: Merge passing pull request
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ secrets.PR_AUTOMATION_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          prs="$(gh api -H "Accept: application/vnd.github+json" "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls")"
+          echo "$prs" | jq -c '.[]' | while read -r pr; do
+            number="$(echo "$pr" | jq -r .number)"
+            base="$(echo "$pr" | jq -r .base.ref)"
+            head="$(echo "$pr" | jq -r .head.ref)"
+            sha="$(echo "$pr" | jq -r .head.sha)"
+            state="$(echo "$pr" | jq -r .state)"
+            [ "$state" = "open" ] || continue
+            [ "$sha" = "$HEAD_SHA" ] || continue
+            case "$head" in
+              feat/*|fix/*|docs/*|ci/*|build/*) [ "$base" = "dev" ] || continue ;;
+              dev) [ "$base" = "main" ] || continue ;;
+              *) continue ;;
+            esac
+            gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --merge --match-head-commit "$HEAD_SHA"
+          done

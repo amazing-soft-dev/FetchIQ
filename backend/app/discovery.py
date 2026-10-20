@@ -1,5 +1,6 @@
 """GitHub user search with date splits, checkpoints, and unique-index dedup."""
 
+import asyncio
 from datetime import date
 from typing import Any
 from uuid import uuid4
@@ -8,8 +9,15 @@ from pymongo.errors import DuplicateKeyError
 
 from app.dates import account_age_window, split_date_window
 from app.db import utcnow
+from app.enrichment import EnrichmentService
 from app.geo import UNITED_STATES
-from app.github import RateLimited, parse_next_link, read_budget
+from app.github import (
+    RateLimited,
+    parse_next_link,
+    rate_limit_budget,
+    read_budget,
+    wait_out_rate_limit,
+)
 from app.models import SearchCriteria
 
 SEARCH_RESULT_CAP = 1000
@@ -107,6 +115,7 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
                     "public_email": None,
                     "location_raw": None,
                     "country": None,
+                    "utc_offset": None,
                     "us_state": None,
                     "location_confidence": None,
                     "github_created_at": None,
@@ -129,10 +138,12 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
 
 
 class DiscoveryService:
-    def __init__(self, db, github, *, today: date | None = None) -> None:
+    def __init__(self, db, github, *, today: date | None = None, sleeper=None) -> None:
         self.db = db
         self.github = github
         self.today = today or utcnow().date()
+        self.sleeper = sleeper or asyncio.sleep
+        self.enrichment = EnrichmentService(db, github, sleeper=self.sleeper)
 
     async def run(self, job_id: str) -> str:
         job = await self.db.search_jobs.find_one({"_id": job_id})
@@ -174,8 +185,11 @@ class DiscoveryService:
             try:
                 response = await self._fetch(window, criteria, start, end)
             except RateLimited as exc:
-                await self._pause_for_rate_limit(job_id, checkpoint, exc)
-                return "paused"
+                control = await self._wait_through_rate_limit(job_id, checkpoint, exc)
+                if control:
+                    await self._finish_control(job_id, control, checkpoint)
+                    return control
+                continue
 
             await self._store_budget(job_id, response, retry_after_seconds=None)
             if response.status_code >= 400:
@@ -223,6 +237,9 @@ class DiscoveryService:
                     discovered += 1
 
             if discovered >= limit:
+                stopped = await self._enrich_page(job_id)
+                if stopped:
+                    return stopped
                 return await self._complete(job_id, checkpoint)
 
             next_url = parse_next_link(response.headers.get("link"))
@@ -241,6 +258,17 @@ class DiscoveryService:
             else:
                 checkpoint["windows"] = windows[1:]
             await self._save_checkpoint(job_id, checkpoint)
+            stopped = await self._enrich_page(job_id)
+            if stopped:
+                return stopped
+
+    async def _enrich_page(self, job_id: str) -> str | None:
+        """Fill profiles from the page just saved before the next search request."""
+
+        outcome = await self.enrichment.enrich_pending(job_id)
+        if outcome == "done":
+            return None
+        return outcome
 
     async def _fetch(self, window: dict, criteria: SearchCriteria, start: date, end: date):
         if window.get("next_url"):
@@ -271,29 +299,36 @@ class DiscoveryService:
         )
         await self._event(job_id, status, f"Job {status}", {})
 
-    async def _pause_for_rate_limit(self, job_id: str, checkpoint: dict, exc: RateLimited) -> None:
+    async def _wait_through_rate_limit(
+        self, job_id: str, checkpoint: dict, exc: RateLimited
+    ) -> str | None:
+        """Sleep until the limit resets. Return a user pause or cancel, if one arrived."""
+
         await self._save_checkpoint(job_id, checkpoint)
+        await self._record_rate_limit(job_id, exc, exc.retry_after)
+        await self._event(
+            job_id,
+            "rate_limited",
+            "Waiting for the GitHub rate limit to reset",
+            {"retry_after_seconds": exc.retry_after},
+        )
+
+        async def stopped() -> str | None:
+            return await self._control(job_id)
+
+        reason, remaining = await wait_out_rate_limit(exc.retry_after, self.sleeper, stopped)
+        await self._record_rate_limit(job_id, exc, remaining)
+        return reason
+
+    async def _record_rate_limit(self, job_id: str, exc: RateLimited, seconds_left: float) -> None:
         await self.db.search_jobs.update_one(
             {"_id": job_id},
             {
                 "$set": {
-                    "status": "paused",
-                    "control": None,
-                    "request_budget": {
-                        "limit": exc.limit,
-                        "remaining": exc.remaining,
-                        "reset_at": exc.reset_at,
-                        "retry_after_seconds": exc.retry_after,
-                    },
+                    "request_budget": rate_limit_budget(exc, seconds_left=seconds_left),
                     "updated_at": utcnow(),
                 }
             },
-        )
-        await self._event(
-            job_id,
-            "rate_limited",
-            "Paused until the GitHub rate limit resets",
-            {"retry_after_seconds": exc.retry_after},
         )
 
     async def _store_budget(
