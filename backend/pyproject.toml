@@ -1,0 +1,45 @@
+[project]
+name = "fetchiq"
+version = "0.1.0"
+description = "Public GitHub developer discovery and contact enrichment"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.6",
+  "httpx>=0.28.1",
+  "motor>=3.7.0",
+  "pydantic>=2.10.4",
+  "pydantic-settings>=2.7.0",
+  "pymongo>=4.11",
+  "python-dateutil>=2.9.0",
+  "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mongomock-motor>=0.0.36",
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.0",
+  "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
