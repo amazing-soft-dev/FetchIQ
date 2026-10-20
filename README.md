@@ -96,4 +96,7 @@ python -m pytest
 cd frontend
 npm run typecheck
 npm run lint
+npm run build
 ```
+
+Branching, commit messages, pull request checks, and CI are described in [CONTRIBUTING.md](CONTRIBUTING.md).
