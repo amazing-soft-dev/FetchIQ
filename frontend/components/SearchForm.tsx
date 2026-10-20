@@ -47,6 +47,7 @@ function parseKeywords(value: string): string[] {
 }
 
 const AGE_DEFAULTS: AccountAge = emptyCriteria().account_age;
+const LIMIT_DEFAULT = emptyCriteria().candidate_limit;
 
 function emptyAgeInputs(): Record<keyof AccountAge, string> {
   return { min_years: "", min_months: "", max_years: "", max_months: "" };
@@ -75,6 +76,7 @@ export function SearchForm() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria);
   const [ageInputs, setAgeInputs] = useState(emptyAgeInputs);
+  const [limitInput, setLimitInput] = useState("");
   const [keywordText, setKeywordText] = useState("");
   const [presetName, setPresetName] = useState("");
   const [presetVersion, setPresetVersion] = useState(0);
@@ -108,6 +110,7 @@ export function SearchForm() {
       us_states: unitedStatesSelected ? criteria.us_states : [],
       keywords: parseKeywords(keywordText),
       account_age: accountAgeFromInputs(ageInputs),
+      candidate_limit: limitInput.trim() === "" ? LIMIT_DEFAULT : Number(limitInput),
     };
   }
 
@@ -136,6 +139,7 @@ export function SearchForm() {
       max_years: String(age.max_years),
       max_months: String(age.max_months),
     });
+    setLimitInput(String(preset.criteria.candidate_limit));
     setKeywordText(preset.criteria.keywords.join(", "));
     setPresetVersion((version) => version + 1);
     setError(null);
@@ -292,10 +296,9 @@ export function SearchForm() {
           type="number"
           min={1}
           max={5000}
-          value={criteria.candidate_limit}
-          onChange={(event) =>
-            setCriteria((current) => ({ ...current, candidate_limit: Number(event.target.value) }))
-          }
+          placeholder={String(LIMIT_DEFAULT)}
+          value={limitInput}
+          onChange={(event) => setLimitInput(event.target.value)}
         />
       </label>
 
