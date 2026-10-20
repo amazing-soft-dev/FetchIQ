@@ -133,9 +133,8 @@ export function JobPanel({ jobId }: { jobId: string }) {
           {job.counts.discovered > 0 ? (
             <>
               <p className="muted">
-                {job.counts.enriched} of {job.counts.discovered} profiles enriched. Name, location,
-                website, and contacts published in a profile or repository README are filled during
-                enrichment. A download taken before that finishes only lists usernames.
+                {job.counts.enriched} of {job.counts.discovered} profiles enriched. Profile name,
+                location, public email, and UTC offset are filled as each profile is enriched.
               </p>
               <div className="export-box">
                 <label>

@@ -128,6 +128,8 @@ async def test_over_1000_results_split_into_narrower_windows(db) -> None:
     calls: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
         span = _span(request.url.params["q"])
         calls.append(span)
         if span > 40:
@@ -163,6 +165,8 @@ async def test_over_1000_results_split_into_narrower_windows(db) -> None:
 @pytest.mark.asyncio
 async def test_split_windows_do_not_insert_the_same_user_twice(db) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
         span = _span(request.url.params["q"])
         if span > 40:
             return httpx.Response(200, json={"total_count": 2000, "items": []})
@@ -257,15 +261,20 @@ async def test_pagination_cap_flags_incomplete(db) -> None:
 
 @pytest.mark.asyncio
 async def test_resume_after_simulated_429(db) -> None:
-    calls = {"count": 0}
+    """A search 429 waits in short steps and continues the same checkpoint."""
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
         calls["count"] += 1
         if calls["count"] == 1:
             return httpx.Response(
                 429,
                 headers={
-                    "Retry-After": "0",
+                    "Retry-After": "2",
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Limit": "30",
                 },
@@ -273,7 +282,54 @@ async def test_resume_after_simulated_429(db) -> None:
             )
         return httpx.Response(200, json={"total_count": 1, "items": [_user(99, "octocat")]})
 
-    app, runner, github = _stack(db, handler)
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    app, runner, github = _stack(db, handler, sleeper=sleeper)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+            events = await db.job_events.find({"job_id": job_id, "kind": "rate_limited"}).to_list(
+                None
+            )
+    await github.aclose()
+
+    assert calls["count"] >= 2
+    assert sleeps == [1.0, 1.0]
+    assert len(events) == 1
+    assert finished["status"] == "succeeded"
+    assert finished["counts"]["discovered"] == 1
+    assert await db.candidates.count_documents({"job_id": job_id, "github_user_id": 99}) == 1
+
+
+@pytest.mark.asyncio
+async def test_pause_during_rate_limit_stops_until_resume(db) -> None:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "2", "X-RateLimit-Remaining": "0"},
+                json={"message": "API rate limit exceeded"},
+            )
+        return httpx.Response(200, json={"total_count": 1, "items": [_user(99, "octocat")]})
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            await db.search_jobs.update_one({}, {"$set": {"control": "pause"}})
+
+    app, runner, github = _stack(db, handler, sleeper=sleeper)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -284,13 +340,8 @@ async def test_resume_after_simulated_429(db) -> None:
             paused = (await client.get(f"/api/jobs/{job_id}")).json()
             assert paused["status"] == "paused"
             assert paused["counts"]["discovered"] == 0
-            assert paused["request_budget"]["retry_after_seconds"] == 0
-            checkpoint = await db.search_jobs.find_one({"_id": job_id})
-            assert checkpoint["checkpoint"]["windows"]
-            events = await db.job_events.find({"job_id": job_id, "kind": "rate_limited"}).to_list(
-                None
-            )
-            assert len(events) == 1
+            assert calls["count"] == 1
+            assert sleeps == [1.0]
 
             resumed = await client.post(f"/api/jobs/{job_id}/resume")
             assert resumed.status_code == 200
@@ -298,10 +349,94 @@ async def test_resume_after_simulated_429(db) -> None:
             finished = (await client.get(f"/api/jobs/{job_id}")).json()
     await github.aclose()
 
-    assert calls["count"] >= 2
     assert finished["status"] == "succeeded"
     assert finished["counts"]["discovered"] == 1
-    assert await db.candidates.count_documents({"job_id": job_id, "github_user_id": 99}) == 1
+    assert sleeps == [1.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_each_search_page_is_enriched_before_the_next(db) -> None:
+    order: list[str] = []
+    profile_calls = {"count": 0}
+    html = (
+        '<profile-timezone data-hours-ahead-of-utc="-3.0"></profile-timezone>'
+        '<a href="mailto:ada@example.com">mail</a>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("accept") == "text/html":
+            order.append("html")
+            return httpx.Response(200, text=html)
+        path = request.url.path
+        if path == "/search/users":
+            page = int(request.url.params.get("page", "1"))
+            order.append(f"search:{page}")
+            item = _user(page, f"user{page}")
+            if page == 1:
+                params = dict(request.url.params)
+                params["page"] = "2"
+                next_url = request.url.copy_with(params=params)
+                return httpx.Response(
+                    200,
+                    headers={"Link": f'<{next_url}>; rel="next"'},
+                    json={"total_count": 2, "items": [item]},
+                )
+            return httpx.Response(200, json={"total_count": 2, "items": [item]})
+        if path.startswith("/users/") and path.count("/") == 2:
+            profile_calls["count"] += 1
+            login = path.rsplit("/", 1)[-1]
+            order.append(f"profile:{login}")
+            if profile_calls["count"] == 1:
+                return httpx.Response(
+                    429,
+                    headers={"Retry-After": "2", "X-RateLimit-Remaining": "0"},
+                    json={"message": "API rate limit exceeded"},
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "login": login,
+                    "name": login,
+                    "location": "Berlin, Germany",
+                    "email": None,
+                    "bio": None,
+                    "blog": None,
+                    "company": None,
+                    "twitter_username": None,
+                    "created_at": "2012-01-01T00:00:00Z",
+                    "public_repos": 1,
+                },
+            )
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    sleeps: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    app, runner, github = _stack(db, handler, sleeper=sleeper)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+
+    assert finished["status"] == "succeeded"
+    assert finished["counts"]["discovered"] == 2
+    assert finished["counts"]["enriched"] == 2
+    search_two = order.index("search:2")
+    assert order.index("profile:user1") < search_two
+    assert order.index("html") < search_two
+    assert sleeps == [1.0, 1.0]
+    stored = await db.candidates.find_one({"job_id": job_id, "login": "user1"})
+    assert stored["utc_offset"] == "-03:00"
+    assert stored["public_email"] == "ada@example.com"
+    assert stored["country"] == "Germany"
+    assert ".patch" not in " ".join(order)
 
 
 @pytest.mark.asyncio

@@ -64,7 +64,7 @@ The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
 ## Jobs
 
-`POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 pauses the job and keeps the date-window checkpoint. Resume continues from that checkpoint with the same token.
+`POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 waits until the GitHub rate limit resets, then continues from the same checkpoint unless the user paused or cancelled. Resume continues a paused job from that checkpoint with the same token.
 
 Search criteria:
 

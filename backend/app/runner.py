@@ -5,7 +5,7 @@ import asyncio
 from app.db import utcnow
 from app.discovery import DiscoveryService
 from app.enrichment import EnrichmentService
-from app.github import GitHubClient
+from app.github import RATE_LIMIT_STEP_SECONDS, GitHubClient
 
 
 class JobRunner:
@@ -41,31 +41,70 @@ class JobRunner:
                 continue
             self._tasks[job_id] = asyncio.create_task(self._run(job_id))
 
-    async def _wait_for_budget(self, job_id: str) -> None:
+    async def _control(self, job_id: str) -> str | None:
+        job = await self.db.search_jobs.find_one({"_id": job_id}, {"control": 1})
+        control = (job or {}).get("control")
+        if control == "cancel":
+            return "cancelled"
+        if control == "pause":
+            return "paused"
+        return None
+
+    async def _wait_for_budget(self, job_id: str) -> bool:
+        """Sleep through a stored rate-limit window. False when the user stops the job."""
+
         job = await self.db.search_jobs.find_one({"_id": job_id}, {"request_budget": 1})
         budget = (job or {}).get("request_budget") or {}
         wait = 0.0
-        retry = budget.get("retry_after_seconds")
-        if isinstance(retry, int | float) and retry > 0:
-            wait = float(retry)
         reset_at = budget.get("reset_at")
         if reset_at is not None:
             if reset_at.tzinfo is None:
                 reset_at = reset_at.replace(tzinfo=utcnow().tzinfo)
-            remaining = (reset_at - utcnow()).total_seconds()
-            if remaining > 0:
-                wait = max(wait, remaining)
+            remaining_reset = (reset_at - utcnow()).total_seconds()
+            if remaining_reset > 0:
+                wait = remaining_reset
+        else:
+            retry = budget.get("retry_after_seconds")
+            if isinstance(retry, int | float) and retry > 0:
+                wait = float(retry)
+        remaining = wait
+        while remaining > 0:
+            control = await self._control(job_id)
+            if control:
+                await self.db.search_jobs.update_one(
+                    {"_id": job_id},
+                    {
+                        "$set": {
+                            "status": control,
+                            "control": None,
+                            "request_budget.retry_after_seconds": remaining,
+                            "updated_at": utcnow(),
+                        }
+                    },
+                )
+                return False
+            step = min(RATE_LIMIT_STEP_SECONDS, remaining)
+            await self.sleeper(step)
+            remaining = max(0.0, remaining - step)
         if wait > 0:
-            await self.sleeper(wait)
+            await self.db.search_jobs.update_one(
+                {"_id": job_id},
+                {"$set": {"request_budget.retry_after_seconds": None, "updated_at": utcnow()}},
+            )
+        return True
 
     async def _run(self, job_id: str) -> None:
         try:
-            await self._wait_for_budget(job_id)
-            outcome = await DiscoveryService(self.db, self.github).run(job_id)
+            if not await self._wait_for_budget(job_id):
+                return
+            outcome = await DiscoveryService(self.db, self.github, sleeper=self.sleeper).run(job_id)
             if outcome != "done":
                 return
-            await self._wait_for_budget(job_id)
-            outcome = await EnrichmentService(self.db, self.github).run(job_id)
+            if not await self._wait_for_budget(job_id):
+                return
+            outcome = await EnrichmentService(self.db, self.github, sleeper=self.sleeper).run(
+                job_id
+            )
             if outcome != "done":
                 return
             job = await self.db.search_jobs.find_one({"_id": job_id}, {"incomplete": 1})
