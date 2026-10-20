@@ -1,0 +1,65 @@
+name: Open pull request
+
+on:
+  create:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Existing branch to open into dev
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.PR_AUTOMATION_TOKEN }}
+        run: |
+          set -eu
+          repo="$GITHUB_REPOSITORY"
+          owner="${repo%%/*}"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            head="${{ inputs.branch }}"
+            base="dev"
+          elif [ "${{ github.ref_name }}" = "dev" ]; then
+            head="dev"
+            base="main"
+          elif [ "${{ github.event.ref_type }}" = "branch" ]; then
+            head="${{ github.event.ref }}"
+            base="dev"
+          else
+            echo "Nothing to open."
+            exit 0
+          fi
+
+          case "$head" in
+            feat/*|fix/*|docs/*|ci/*|build/*|dev) ;;
+            *) echo "Branch $head is not eligible."; exit 0 ;;
+          esac
+
+          git fetch origin "$base" "$head"
+          if [ "$base" = "main" ] && [ "$(git rev-list --count "origin/main..origin/dev")" = "0" ]; then
+            echo "dev has nothing new for main."
+            exit 0
+          fi
+
+          existing="$(gh pr list --repo "$repo" --base "$base" --head "$owner:$head" --state open --json number --jq length)"
+          if [ "$existing" != "0" ]; then
+            echo "Pull request already open."
+            exit 0
+          fi
+
+          title="$(git log -1 --format=%s "origin/$head")"
+          gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "Opened automatically from \`$head\`."
