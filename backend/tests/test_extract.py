@@ -1,4 +1,4 @@
-from app.extract import classify_url, extract_published_contacts, normalize_email
+from app.extract import classify_url, extract_published_contacts, normalize_email, normalize_url
 
 
 def test_null_and_noreply_emails_are_not_contacts() -> None:
@@ -39,6 +39,14 @@ def test_name_and_domain_are_not_combined_into_an_email() -> None:
     found = extract_published_contacts("Ada Lovelace writes at https://example.com")
     assert found.emails == []
     assert found.urls == [("other_social", "https://example.com")]
+
+
+def test_truncated_bracket_url_does_not_raise() -> None:
+    assert normalize_url("http://[::1") is None
+    assert normalize_url("http://[::1]/path") is None
+    found = extract_published_contacts("Email ada@example.com and http://[::1]/path")
+    assert found.emails == ["ada@example.com"]
+    assert all("[::1" not in url for _kind, url in found.urls)
 
 
 def test_profile_blog_can_be_a_website() -> None:

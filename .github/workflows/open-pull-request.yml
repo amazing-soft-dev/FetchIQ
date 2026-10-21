@@ -24,7 +24,7 @@ jobs:
 
       - name: Open pull request
         env:
-          GH_TOKEN: ${{ secrets.PR_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -eu
           repo="$GITHUB_REPOSITORY"

@@ -178,6 +178,13 @@ class EnrichmentService:
                     await self._finish_control(job_id, control, checkpoint)
                     return control
                 continue
+            except Exception as exc:
+                await self._miss(
+                    job_id,
+                    candidate,
+                    "error",
+                    f"Skipped {candidate.get('login')}: {exc}"[:500],
+                )
             checkpoint["last_enriched_user_id"] = candidate["github_user_id"]
             await self._save_checkpoint(job_id, checkpoint)
 
@@ -209,6 +216,13 @@ class EnrichmentService:
                 if control:
                     await self._finish_control(job_id, control, checkpoint)
                     return control
+            except Exception as exc:
+                await self._miss(
+                    job_id,
+                    candidate,
+                    "error",
+                    f"Skipped {candidate.get('login')}: {exc}"[:500],
+                )
 
     async def _enrich_one(self, job_id: str, candidate: dict, keywords: list[str]) -> None:
         fresh = await self._fresh_copy(candidate)

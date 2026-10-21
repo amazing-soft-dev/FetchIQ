@@ -395,3 +395,71 @@ async def test_recent_profile_copies_utc_offset(db) -> None:
     assert stored["name"] == "Ada Lovelace"
     assert stored["country"] == "Brazil"
     assert stored["public_email"] == "ada@example.com"
+
+
+@pytest.mark.asyncio
+async def test_bad_profile_url_does_not_stop_the_next_profile(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"], keywords=[]))
+    job["status"] = "running"
+    job["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
+    await db.search_jobs.insert_one(job)
+    await db.candidates.insert_many(
+        [
+            {
+                "job_id": job["_id"],
+                "github_user_id": 7,
+                "login": "ada",
+                "profile_url": "https://github.com/ada",
+                "enrichment_status": "pending",
+                "collection_status": "discovered",
+                "public_email": None,
+            },
+            {
+                "job_id": job["_id"],
+                "github_user_id": 8,
+                "login": "grace",
+                "profile_url": "https://github.com/grace",
+                "enrichment_status": "pending",
+                "collection_status": "discovered",
+                "public_email": None,
+            },
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("accept") == "text/html":
+            return httpx.Response(200, text="<html></html>")
+        if request.url.path == "/users/ada":
+            return httpx.Response(
+                200,
+                json=_profile(
+                    email="ada@example.com",
+                    location="Berlin, Germany",
+                    bio="Notes at http://[::1]/path",
+                ),
+            )
+        if request.url.path == "/users/grace":
+            profile = _profile(
+                email="grace@example.com", location="Berlin, Germany", bio="Computers"
+            )
+            profile["login"] = "grace"
+            profile["name"] = "Grace Hopper"
+            return httpx.Response(200, json=profile)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job["_id"])
+    await github.aclose()
+
+    assert outcome == "done"
+    ada = await db.candidates.find_one({"github_user_id": 7})
+    grace = await db.candidates.find_one({"github_user_id": 8})
+    assert ada["enrichment_status"] == "enriched"
+    assert ada["public_email"] == "ada@example.com"
+    assert ada["name"] == "Ada Lovelace"
+    assert grace["enrichment_status"] == "enriched"
+    assert grace["public_email"] == "grace@example.com"
+    assert grace["name"] == "Grace Hopper"
+    stored_job = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored_job["status"] == "running"
+    assert stored_job["error"] is None

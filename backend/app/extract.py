@@ -62,8 +62,17 @@ def normalize_url(value: str) -> str | None:
     text = value.strip().strip("<>").rstrip(").,;")
     if text.startswith("//"):
         text = f"https:{text}"
-    parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or "@" in parsed.netloc:
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or "@" in parsed.netloc
+        or "[" in parsed.netloc
+        or "]" in parsed.netloc
+    ):
         return None
     host = parsed.netloc.casefold()
     if host.endswith(":80") and parsed.scheme == "http":
