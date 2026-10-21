@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import Settings
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
+from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
 from app.routes.presets import router as presets_router
 from app.runner import JobRunner
@@ -59,6 +60,7 @@ def create_app(
         allow_headers=["*"],
     )
     app.include_router(jobs_router)
+    app.include_router(contacts_router)
     app.include_router(presets_router)
 
     @app.get("/api/health")

@@ -39,6 +39,7 @@ COLUMNS = [
     "location_confidence",
     "last_checked_at",
     "collection_status",
+    "outreach_status",
 ]
 
 KIND_COLUMNS = {
@@ -126,7 +127,11 @@ def _plain_number(value: object) -> str:
     return str(value)
 
 
-def build_row(candidate: dict, evidence: list[dict]) -> dict[str, str]:
+def build_row(
+    candidate: dict,
+    evidence: list[dict],
+    status_labels: dict[str, str] | None = None,
+) -> dict[str, str]:
     selected = {kind: _select(evidence, kind) for kind in ("email", *KIND_COLUMNS)}
     email = selected["email"]
     other_rows = [
@@ -194,8 +199,17 @@ def build_row(candidate: dict, evidence: list[dict]) -> dict[str, str]:
         if isinstance(checked, datetime)
         else (checked or ""),
         "collection_status": candidate.get("collection_status") or "",
+        "outreach_status": _status_label(candidate.get("outreach_status"), status_labels),
     }
     return {column: "" if row[column] is None else str(row[column]) for column in COLUMNS}
+
+
+def _status_label(status_id: object, status_labels: dict[str, str] | None) -> str:
+    if not isinstance(status_id, str) or not status_id:
+        return ""
+    if status_labels is None:
+        return status_id
+    return status_labels.get(status_id, "")
 
 
 def has_public_contact(row: dict[str, str]) -> bool:
@@ -215,6 +229,10 @@ def dedupe_candidates(candidates: list[dict]) -> list[dict]:
 async def stream_job_csv(db, job_id: str, *, include_no_contact: bool) -> AsyncIterator[str]:
     """Yield CSV lines from a Mongo cursor without holding every candidate."""
 
+    labels = {
+        document["_id"]: document.get("label") or document["_id"]
+        async for document in db.outreach_statuses.find({})
+    }
     yield format_csv_row(COLUMNS)
     cursor = db.candidates.find({"job_id": job_id}).sort(
         [("github_user_id", 1), ("last_checked_at", -1)]
@@ -226,7 +244,7 @@ async def stream_job_csv(db, job_id: str, *, include_no_contact: bool) -> AsyncI
             continue
         seen.add(user_id)
         evidence = await db.contact_evidence.find({"github_user_id": user_id}).to_list(None)
-        row = build_row(candidate, evidence)
+        row = build_row(candidate, evidence, status_labels=labels)
         if not include_no_contact and not has_public_contact(row):
             continue
         yield format_csv_row([row[column] for column in COLUMNS])

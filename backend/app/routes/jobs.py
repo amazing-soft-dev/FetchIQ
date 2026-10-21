@@ -113,6 +113,25 @@ async def _load(db, job_id: str) -> dict:
     return document
 
 
+@router.get("/jobs")
+async def list_jobs(request: Request) -> dict:
+    cursor = request.app.state.db.search_jobs.find(
+        {},
+        {"status": 1, "created_at": 1},
+    ).sort([("created_at", -1)])
+    documents = await cursor.to_list(100)
+    return {
+        "jobs": [
+            {
+                "id": document["_id"],
+                "status": document.get("status"),
+                "created_at": _iso(document.get("created_at")),
+            }
+            for document in documents
+        ]
+    }
+
+
 @router.post("/jobs", status_code=201)
 async def create_job(body: JobCreate, request: Request) -> dict:
     document = new_job_document(body.criteria)
