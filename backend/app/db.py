@@ -26,11 +26,10 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         [("status", 1), ("created_at", -1)],
         name="job_status_created",
     )
-    await db.candidates.create_index(
-        [("job_id", 1), ("github_user_id", 1)],
-        unique=True,
-        name="uniq_job_user",
-    )
+    candidate_indexes = await db.candidates.index_information()
+    if "uniq_job_user" in candidate_indexes:
+        await db.candidates.drop_index("uniq_job_user")
+    await db.candidates.create_index([("login", 1)], unique=True, name="uniq_login")
     await db.contact_evidence.create_index(
         [("github_user_id", 1), ("kind", 1), ("normalized_value", 1)],
         unique=True,

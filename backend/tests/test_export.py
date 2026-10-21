@@ -55,12 +55,8 @@ def test_row_includes_provenance_and_selected_contacts() -> None:
         "company": "Engines",
         "country": "Germany",
         "utc_offset": "-03:00",
-        "us_state": None,
         "github_created_at": "2020-06-01T00:00:00Z",
         "public_repos_count": 3,
-        "primary_languages": ["Python", "Ruby"],
-        "matched_keywords": ["python"],
-        "relevant_repository_urls": ["https://github.com/ada/tools"],
         "location_confidence": 0.9,
         "last_checked_at": checked,
         "collection_status": "enriched",
@@ -99,8 +95,15 @@ def test_row_includes_provenance_and_selected_contacts() -> None:
     assert "https://github.com/ada" in row["contact_source_urls"]
     assert row["email_validation_status"] == "valid"
     assert row["account_age_months"] == "48"
-    assert row["primary_languages"] == "Python; Ruby"
     assert row["other_social_urls"] == "https://example.org/ada"
+    for column in (
+        "us_state",
+        "primary_languages",
+        "matched_keywords",
+        "relevant_repository_urls",
+    ):
+        assert column not in COLUMNS
+        assert column not in row
     assert row["location_confidence"] == "0.9"
 
 

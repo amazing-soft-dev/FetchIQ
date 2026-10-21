@@ -32,6 +32,8 @@ export type Job = {
     discovered: number;
     enriched: number;
     errors: number;
+    emails: number;
+    linkedin_without_email: number;
   };
   error: string | null;
   created_at: string | null;

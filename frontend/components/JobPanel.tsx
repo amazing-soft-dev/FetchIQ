@@ -94,6 +94,14 @@ export function JobPanel({ jobId }: { jobId: string }) {
               <dt>Errors</dt>
               <dd>{job.counts.errors}</dd>
             </div>
+            <div>
+              <dt>Emails</dt>
+              <dd>{job.counts.emails}</dd>
+            </div>
+            <div>
+              <dt>LinkedIn without email</dt>
+              <dd>{job.counts.linkedin_without_email}</dd>
+            </div>
           </dl>
           {job.incomplete_reasons.length > 0 ? (
             <ul className="reasons">

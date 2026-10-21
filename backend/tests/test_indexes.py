@@ -1,6 +1,8 @@
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.db import ensure_indexes
+
 
 @pytest.mark.asyncio
 async def test_required_indexes_exist(db) -> None:
@@ -12,8 +14,9 @@ async def test_required_indexes_exist(db) -> None:
 
     assert preset_indexes["preset_name"]["key"] == [("name", 1)]
     assert job_indexes["job_status_created"]["key"] == [("status", 1), ("created_at", -1)]
-    assert candidate_indexes["uniq_job_user"]["unique"] is True
-    assert candidate_indexes["uniq_job_user"]["key"] == [("job_id", 1), ("github_user_id", 1)]
+    assert "uniq_job_user" not in candidate_indexes
+    assert candidate_indexes["uniq_login"]["unique"] is True
+    assert candidate_indexes["uniq_login"]["key"] == [("login", 1)]
     assert evidence_indexes["uniq_evidence"]["unique"] is True
     assert evidence_indexes["uniq_evidence"]["key"] == [
         ("github_user_id", 1),
@@ -24,14 +27,26 @@ async def test_required_indexes_exist(db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_candidate_identity_is_unique_per_job(db) -> None:
+async def test_candidate_login_is_unique(db) -> None:
     await db.candidates.insert_one({"job_id": "job-1", "github_user_id": 7, "login": "ada"})
     with pytest.raises(DuplicateKeyError):
-        await db.candidates.insert_one(
-            {"job_id": "job-1", "github_user_id": 7, "login": "ada-again"}
-        )
-    await db.candidates.insert_one({"job_id": "job-2", "github_user_id": 7, "login": "ada"})
-    assert await db.candidates.count_documents({"github_user_id": 7}) == 2
+        await db.candidates.insert_one({"job_id": "job-2", "github_user_id": 8, "login": "ada"})
+    await db.candidates.insert_one({"job_id": "job-2", "github_user_id": 7, "login": "grace"})
+    assert await db.candidates.count_documents({}) == 2
+
+
+@pytest.mark.asyncio
+async def test_old_job_user_index_is_dropped(db) -> None:
+    await db.candidates.create_index(
+        [("job_id", 1), ("github_user_id", 1)],
+        unique=True,
+        name="uniq_job_user",
+    )
+    await ensure_indexes(db)
+    indexes = await db.candidates.index_information()
+    assert "uniq_job_user" not in indexes
+    assert indexes["uniq_login"]["key"] == [("login", 1)]
+    assert indexes["uniq_login"]["unique"] is True
 
 
 @pytest.mark.asyncio

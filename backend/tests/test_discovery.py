@@ -106,21 +106,50 @@ def test_criteria_rejects_reversed_age_unknown_places_and_states_without_us() ->
 
 
 @pytest.mark.asyncio
-async def test_upsert_dedup_uses_job_and_github_user_id(db) -> None:
+async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -> None:
     job = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(job)
     first = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    await db.candidates.update_one(
+        {"login": "ada"},
+        {
+            "$set": {
+                "enrichment_status": "enriched",
+                "name": "Ada",
+                "us_state": "Oregon",
+                "primary_languages": ["Python"],
+                "matched_keywords": ["python"],
+                "relevant_repository_urls": ["https://github.com/ada/tools"],
+            }
+        },
+    )
     second = await upsert_candidate(db, job["_id"], _user(7, "ada"))
     assert first == "inserted"
     assert second == "already_stored"
-    assert await db.candidates.count_documents({"job_id": job["_id"]}) == 1
+    same = await db.candidates.find_one({"login": "ada"})
+    assert same["enrichment_status"] == "enriched"
+    assert same["name"] == "Ada"
+    assert "us_state" not in same
+    assert "primary_languages" not in same
+    assert "matched_keywords" not in same
+    assert "relevant_repository_urls" not in same
+    assert await db.candidates.count_documents({"login": "ada"}) == 1
     stored = await db.search_jobs.find_one({"_id": job["_id"]})
     assert stored["counts"]["discovered"] == 1
 
     other = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(other)
-    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "inserted"
-    assert await db.candidates.count_documents({"github_user_id": 7}) == 2
+    assert await upsert_candidate(db, other["_id"], _user(8, "ada")) == "already_stored"
+    moved = await db.candidates.find_one({"login": "ada"})
+    assert moved["job_id"] == other["_id"]
+    assert moved["github_user_id"] == 8
+    assert moved["enrichment_status"] == "pending"
+    assert moved["name"] is None
+    assert await db.candidates.count_documents({"login": "ada"}) == 1
+    assert await db.candidates.count_documents({"job_id": job["_id"]}) == 0
+    other_stored = await db.search_jobs.find_one({"_id": other["_id"]})
+    assert other_stored["counts"]["discovered"] == 0
+    assert stored["counts"]["discovered"] == 1
 
 
 @pytest.mark.asyncio
@@ -497,3 +526,62 @@ async def test_cancel_queued_job(db) -> None:
             rejected = await client.post(f"/api/jobs/{job_id}/start")
             assert rejected.status_code == 409
     await github.aclose()
+
+
+@pytest.mark.asyncio
+async def test_job_payload_counts_emails_and_linkedin_without_email(db) -> None:
+    app, _runner, github = _stack(
+        db,
+        lambda _request: httpx.Response(500, json={"message": "should not be called"}),
+    )
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            assert created.status_code == 201
+            created_body = created.json()
+            job_id = created_body["id"]
+            assert created_body["counts"]["emails"] == 0
+            assert created_body["counts"]["linkedin_without_email"] == 0
+            await db.candidates.insert_many(
+                [
+                    {"job_id": job_id, "github_user_id": 7, "login": "ada"},
+                    {"job_id": job_id, "github_user_id": 8, "login": "grace"},
+                    {"job_id": job_id, "github_user_id": 9, "login": "linus"},
+                ]
+            )
+            await db.contact_evidence.insert_many(
+                [
+                    {"github_user_id": 7, "kind": "email", "normalized_value": "ada@example.com"},
+                    {
+                        "github_user_id": 7,
+                        "kind": "email",
+                        "normalized_value": "ada.lovelace@example.com",
+                    },
+                    {
+                        "github_user_id": 8,
+                        "kind": "linkedin",
+                        "normalized_value": "https://www.linkedin.com/in/grace",
+                    },
+                    {"github_user_id": 9, "kind": "email", "normalized_value": "linus@example.com"},
+                    {
+                        "github_user_id": 9,
+                        "kind": "linkedin",
+                        "normalized_value": "https://www.linkedin.com/in/linus",
+                    },
+                ]
+            )
+            other = new_job_document(SearchCriteria(countries=["Germany"]))
+            await db.search_jobs.insert_one(other)
+            await db.candidates.insert_one(
+                {"job_id": other["_id"], "github_user_id": 99, "login": "other"}
+            )
+            await db.contact_evidence.insert_one(
+                {"github_user_id": 99, "kind": "email", "normalized_value": "other@example.com"}
+            )
+            payload = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+
+    assert payload["counts"]["emails"] == 3
+    assert payload["counts"]["linkedin_without_email"] == 1
+    assert payload["counts"]["discovered"] == 0
