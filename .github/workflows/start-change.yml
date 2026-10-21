@@ -35,11 +35,11 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Create issue and branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PREFIX: ${{ inputs.prefix }}
           SUMMARY: ${{ inputs.summary }}
           DETAILS: ${{ inputs.details }}
