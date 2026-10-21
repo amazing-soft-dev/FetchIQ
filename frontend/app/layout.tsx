@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import "./globals.css";
@@ -13,8 +14,13 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
     <html lang="en">
       <body>
         <header className="site-header">
-          <span className="mark">FetchIQ</span>
-          <span className="tagline">Public profile discovery</span>
+          <Link href="/" className="mark">
+            FetchIQ
+          </Link>
+          <nav className="site-nav">
+            <Link href="/">Search</Link>
+            <Link href="/contacts">Contacts</Link>
+          </nav>
         </header>
         <main>{children}</main>
       </body>

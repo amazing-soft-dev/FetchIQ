@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import ConfigurationError, ServerSelectionTimeoutError
 
 from app.config import FORBIDDEN_DATABASES, Settings
+from app.contacts import SEED_STATUSES
 
 
 def utcnow() -> datetime:
@@ -31,6 +32,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         await db.candidates.drop_index("uniq_job_user")
     await _collapse_duplicate_logins(db)
     await db.candidates.create_index([("login", 1)], unique=True, name="uniq_login")
+    await db.candidates.create_index([("outreach_status", 1)], name="candidate_outreach_status")
+    await db.candidates.create_index([("public_email", 1)], name="candidate_public_email")
+    await ensure_outreach_statuses(db)
     await db.contact_evidence.create_index(
         [("github_user_id", 1), ("kind", 1), ("normalized_value", 1)],
         unique=True,
@@ -39,6 +43,20 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.job_events.create_index(
         [("job_id", 1), ("created_at", 1)],
         name="job_events_time",
+    )
+
+
+async def ensure_outreach_statuses(db: AsyncIOMotorDatabase) -> None:
+    """Seed the status catalog once. Later edits stay as the user left them."""
+
+    await db.outreach_statuses.create_index([("label", 1)], unique=True, name="uniq_status_label")
+    if await db.outreach_statuses.count_documents({}) > 0:
+        return
+    await db.outreach_statuses.insert_many(
+        [
+            {"_id": status_id, "label": label, "position": position}
+            for status_id, label, position in SEED_STATUSES
+        ]
     )
 
 

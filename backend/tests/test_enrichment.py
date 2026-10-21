@@ -411,7 +411,7 @@ async def test_profile_html_stores_offset_and_keeps_api_email_primary(db) -> Non
 
 
 @pytest.mark.asyncio
-async def test_reenrich_replaces_contact_evidence(db) -> None:
+async def test_reenrich_appends_contacts_and_keeps_stored_linkedin(db) -> None:
     job_id, _candidate = await _seed(db, keywords=[])
     await db.contact_evidence.insert_many(
         [
@@ -447,7 +447,7 @@ async def test_reenrich_replaces_contact_evidence(db) -> None:
     assert other_job["counts"]["discovered"] == 0
     moved = await db.candidates.find_one({"login": "ada"})
     assert moved["job_id"] == other["_id"]
-    assert moved["enrichment_status"] == "pending"
+    assert moved["enrichment_status"] == "merge"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/users/ada":
@@ -465,12 +465,70 @@ async def test_reenrich_replaces_contact_evidence(db) -> None:
 
     assert outcome == "done"
     emails = await db.contact_evidence.find({"github_user_id": 7, "kind": "email"}).to_list(10)
-    assert [item["normalized_value"] for item in emails] == ["Ada@example.com"]
-    assert await db.contact_evidence.count_documents({"github_user_id": 7, "kind": "linkedin"}) == 0
+    assert {item["normalized_value"] for item in emails} == {"old@example.com", "Ada@example.com"}
+    linkedin = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "linkedin"})
+    assert linkedin["normalized_value"] == "https://www.linkedin.com/in/old"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == other["_id"]
     assert stored["public_email"] == "Ada@example.com"
     assert await db.candidates.count_documents({"job_id": job_id}) == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_fills_gaps_and_resets_status_only_when_the_email_changes(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"], keywords=[]))
+    job["status"] = "running"
+    job["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
+    await db.search_jobs.insert_one(job)
+    await db.candidates.insert_one(
+        {
+            "job_id": job["_id"],
+            "github_user_id": 7,
+            "login": "ada",
+            "profile_url": "https://github.com/ada",
+            "enrichment_status": "merge",
+            "collection_status": "enriched",
+            "name": "Ada Lovelace",
+            "company": None,
+            "public_email": "ada@example.com",
+            "outreach_status": "interested",
+        }
+    )
+
+    def handler(email: str):
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/users/ada":
+                return httpx.Response(
+                    200,
+                    json=_profile(email=email, location="Berlin, Germany"),
+                )
+            return httpx.Response(404, json={"message": "Not Found"})
+
+        return respond
+
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler("ada@example.com")))
+    assert await EnrichmentService(db, github).run(job["_id"]) == "done"
+    await github.aclose()
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["name"] == "Ada Lovelace"
+    assert stored["company"] == "Analytical Engines"
+    assert stored["public_email"] == "ada@example.com"
+    assert stored["outreach_status"] == "interested"
+    assert stored["country"] == "Germany"
+
+    await db.candidates.update_one({"login": "ada"}, {"$set": {"enrichment_status": "merge"}})
+    await db.search_jobs.update_one(
+        {"_id": job["_id"]},
+        {"$set": {"checkpoint.last_enriched_user_id": None}},
+    )
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler("grace@example.com")))
+    assert await EnrichmentService(db, github).run(job["_id"]) == "done"
+    await github.aclose()
+    changed = await db.candidates.find_one({"login": "ada"})
+    assert changed["name"] == "Ada Lovelace"
+    assert changed["company"] == "Analytical Engines"
+    assert changed["public_email"] == "grace@example.com"
+    assert "outreach_status" not in changed
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
@@ -142,14 +142,42 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
     assert await upsert_candidate(db, other["_id"], _user(8, "ada")) == "already_stored"
     moved = await db.candidates.find_one({"login": "ada"})
     assert moved["job_id"] == other["_id"]
-    assert moved["github_user_id"] == 8
-    assert moved["enrichment_status"] == "pending"
-    assert moved["name"] is None
+    assert moved["github_user_id"] == 7
+    assert moved["enrichment_status"] == "merge"
+    assert moved["name"] == "Ada"
     assert await db.candidates.count_documents({"login": "ada"}) == 1
     assert await db.candidates.count_documents({"job_id": job["_id"]}) == 0
     other_stored = await db.search_jobs.find_one({"_id": other["_id"]})
     assert other_stored["counts"]["discovered"] == 0
     assert stored["counts"]["discovered"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recent_profile_is_left_unchanged(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(job)
+    await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    await db.candidates.update_one(
+        {"login": "ada"},
+        {
+            "$set": {
+                "enrichment_status": "enriched",
+                "name": "Ada",
+                "public_email": "ada@example.com",
+                "outreach_status": "interested",
+                "last_checked_at": datetime.now(UTC),
+            }
+        },
+    )
+    other = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(other)
+    assert await upsert_candidate(db, other["_id"], _user(8, "ada")) == "already_stored"
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["job_id"] == job["_id"]
+    assert stored["github_user_id"] == 7
+    assert stored["enrichment_status"] == "enriched"
+    assert stored["name"] == "Ada"
+    assert stored["outreach_status"] == "interested"
 
 
 @pytest.mark.asyncio

@@ -144,6 +144,9 @@ export function JobPanel({ jobId }: { jobId: string }) {
                 {job.counts.enriched} of {job.counts.discovered} profiles enriched. Profile name,
                 location, public email, and UTC offset are filled as each profile is enriched.
               </p>
+              <p className="muted">
+                <Link href={`/contacts?job_id=${job.id}`}>Review these contacts</Link>
+              </p>
               <div className="export-box">
                 <label>
                   <input
