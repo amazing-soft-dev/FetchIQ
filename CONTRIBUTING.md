@@ -4,7 +4,7 @@
 
 `dev` is the integration branch. `main` is the release branch. Short-lived branches open into `dev`, and `dev` promotes to `main`.
 
-Use a short-lived branch from the latest `dev`:
+Run **Start change**, then check out the branch named in the issue, then edit. The workflow is [`.github/workflows/start-change.yml`](.github/workflows/start-change.yml). It creates an empty branch from the latest `dev`:
 
 - `feat/<short-description>` for user-facing behavior
 - `fix/<short-description>` for bug fixes

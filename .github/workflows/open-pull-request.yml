@@ -54,6 +54,14 @@ jobs:
             echo "dev has nothing new for main."
             exit 0
           fi
+          case "$head" in
+            feat/*|fix/*|docs/*|ci/*|build/*)
+              if [ "$(git rev-list --count "origin/dev..origin/$head")" = "0" ]; then
+                echo "$head has no commits ahead of dev."
+                exit 0
+              fi
+              ;;
+          esac
 
           existing="$(gh pr list --repo "$repo" --base "$base" --head "$owner:$head" --state open --json number --jq length)"
           if [ "$existing" != "0" ]; then
