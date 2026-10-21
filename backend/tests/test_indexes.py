@@ -1,4 +1,7 @@
+from datetime import UTC, datetime
+
 import pytest
+from mongomock_motor import AsyncMongoMockClient
 from pymongo.errors import DuplicateKeyError
 
 from app.db import ensure_indexes
@@ -46,6 +49,38 @@ async def test_old_job_user_index_is_dropped(db) -> None:
     indexes = await db.candidates.index_information()
     assert "uniq_job_user" not in indexes
     assert indexes["uniq_login"]["key"] == [("login", 1)]
+    assert indexes["uniq_login"]["unique"] is True
+
+
+@pytest.mark.asyncio
+async def test_existing_duplicate_logins_collapse_before_unique_index() -> None:
+    client = AsyncMongoMockClient()
+    database = client["fetchiq_test"]
+    await database.candidates.insert_many(
+        [
+            {
+                "login": "ada",
+                "job_id": "old",
+                "updated_at": datetime(2020, 1, 1, tzinfo=UTC),
+            },
+            {
+                "login": "ada",
+                "job_id": "new",
+                "updated_at": datetime(2024, 1, 1, tzinfo=UTC),
+            },
+            {
+                "login": "grace",
+                "job_id": "only",
+                "updated_at": datetime(2024, 1, 1, tzinfo=UTC),
+            },
+        ]
+    )
+    await ensure_indexes(database)
+    kept = await database.candidates.find({"login": "ada"}).to_list(10)
+    assert len(kept) == 1
+    assert kept[0]["job_id"] == "new"
+    assert await database.candidates.count_documents({}) == 2
+    indexes = await database.candidates.index_information()
     assert indexes["uniq_login"]["unique"] is True
 
 

@@ -29,6 +29,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     candidate_indexes = await db.candidates.index_information()
     if "uniq_job_user" in candidate_indexes:
         await db.candidates.drop_index("uniq_job_user")
+    await _collapse_duplicate_logins(db)
     await db.candidates.create_index([("login", 1)], unique=True, name="uniq_login")
     await db.contact_evidence.create_index(
         [("github_user_id", 1), ("kind", 1), ("normalized_value", 1)],
@@ -39,6 +40,39 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         [("job_id", 1), ("created_at", 1)],
         name="job_events_time",
     )
+
+
+async def _collapse_duplicate_logins(db: AsyncIOMotorDatabase) -> int:
+    """Keep the newest candidate for each username so a unique login index can build."""
+
+    best: dict[str, tuple[datetime, object]] = {}
+    drop: list[object] = []
+    cursor = db.candidates.find(
+        {},
+        {"login": 1, "updated_at": 1, "last_checked_at": 1, "discovered_at": 1},
+    )
+    async for document in cursor:
+        login = document.get("login")
+        if not isinstance(login, str) or not login:
+            continue
+        stamp = (
+            document.get("updated_at")
+            or document.get("last_checked_at")
+            or document.get("discovered_at")
+            or datetime.min.replace(tzinfo=UTC)
+        )
+        if getattr(stamp, "tzinfo", None) is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        current = best.get(login)
+        if current is None or stamp >= current[0]:
+            if current is not None:
+                drop.append(current[1])
+            best[login] = (stamp, document["_id"])
+        else:
+            drop.append(document["_id"])
+    if drop:
+        await db.candidates.delete_many({"_id": {"$in": drop}})
+    return len(drop)
 
 
 def _mongodb_host(uri: str) -> str:
