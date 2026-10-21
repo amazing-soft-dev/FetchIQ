@@ -280,6 +280,18 @@ button.chip-clear:focus-visible {
   outline-offset: 2px;
 }
 
+.location-age-row {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.85fr) minmax(0, 1.55fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.location-age-row > .chip-select,
+.location-age-row > .account-age {
+  min-width: 0;
+}
+
 .age-grid,
 .preset-row,
 .actions,
@@ -404,6 +416,7 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .location-age-row,
   .age-grid,
   .preset-row,
   .actions,
