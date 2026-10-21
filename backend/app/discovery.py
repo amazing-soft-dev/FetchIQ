@@ -1,4 +1,4 @@
-"""GitHub user search with date splits, checkpoints, and unique-index dedup."""
+"""GitHub user search with date splits, checkpoints, and one row per username."""
 
 import asyncio
 from datetime import date
@@ -88,44 +88,69 @@ def _window(start: date, end: date) -> dict[str, Any]:
     }
 
 
-async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
-    """Insert a candidate once per job and GitHub user id.
+_OBSOLETE_CANDIDATE_FIELDS = {
+    "us_state": "",
+    "primary_languages": "",
+    "matched_keywords": "",
+    "relevant_repository_urls": "",
+}
 
-    A duplicate-key error means another slice already stored this person.
+
+def _pending_candidate(job_id: str, item: dict[str, Any], profile_url: str, now) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "github_user_id": item["id"],
+        "login": item["login"],
+        "profile_url": profile_url,
+        "enrichment_status": "pending",
+        "collection_status": "discovered",
+        "name": None,
+        "bio": None,
+        "company": None,
+        "public_email": None,
+        "location_raw": None,
+        "country": None,
+        "utc_offset": None,
+        "location_confidence": None,
+        "github_created_at": None,
+        "public_repos_count": None,
+        "last_checked_at": None,
+        "updated_at": now,
+    }
+
+
+async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
+    """Insert or overwrite the one candidate row for this GitHub username.
+
+    A username already stored is overwritten. That write is not a new discovery.
+    The same job keeps an enriched profile in place. A later job takes the row
+    and marks it pending so enrichment can replace the contact evidence.
     """
 
     now = utcnow()
     login = item["login"]
     profile_url = item.get("html_url") or f"https://github.com/{login}"
+    existing = await db.candidates.find_one({"login": login}, {"job_id": 1})
+    if existing is not None and existing.get("job_id") == job_id:
+        await db.candidates.update_one(
+            {"_id": existing["_id"]},
+            {
+                "$set": {
+                    "github_user_id": item["id"],
+                    "profile_url": profile_url,
+                    "updated_at": now,
+                },
+                "$unset": _OBSOLETE_CANDIDATE_FIELDS,
+            },
+        )
+        return "already_stored"
     try:
         result = await db.candidates.update_one(
-            {"job_id": job_id, "github_user_id": item["id"]},
+            {"login": login},
             {
-                "$setOnInsert": {
-                    "job_id": job_id,
-                    "github_user_id": item["id"],
-                    "login": login,
-                    "profile_url": profile_url,
-                    "discovered_at": now,
-                    "enrichment_status": "pending",
-                    "collection_status": "discovered",
-                    "name": None,
-                    "bio": None,
-                    "company": None,
-                    "public_email": None,
-                    "location_raw": None,
-                    "country": None,
-                    "utc_offset": None,
-                    "us_state": None,
-                    "location_confidence": None,
-                    "github_created_at": None,
-                    "public_repos_count": None,
-                    "primary_languages": [],
-                    "matched_keywords": [],
-                    "relevant_repository_urls": [],
-                    "last_checked_at": None,
-                },
-                "$set": {"updated_at": now},
+                "$set": _pending_candidate(job_id, item, profile_url, now),
+                "$setOnInsert": {"discovered_at": now},
+                "$unset": _OBSOLETE_CANDIDATE_FIELDS,
             },
             upsert=True,
         )

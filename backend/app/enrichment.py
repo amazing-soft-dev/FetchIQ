@@ -2,8 +2,10 @@
 
 Commit patches, mail headers, and noreply placeholders are never read. Name,
 location, and public email come from the user API. The profile page contributes
-the UTC offset and a published mailto when one is present. If the profile email
-is null and no address is published in the profile or README, the email stays empty.
+the UTC offset and a published mailto when one is present. The profile README is
+always read. Repository READMEs are read only when an email and a LinkedIn URL
+are both still missing: at most three recently updated repositories, stopping
+when an email is found.
 """
 
 import asyncio
@@ -21,8 +23,7 @@ from app.extract import EMAIL_RE, classify_url, extract_published_contacts, norm
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
 from app.locations import normalize_location
 
-MAX_MATCHING_REPOS = 5
-MAX_README_REPOS = 15
+MAX_REPO_READMES = 3
 MAX_README_BYTES = 100_000
 FRESHNESS = timedelta(days=7)
 TWITTER_NAME = re.compile(r"[A-Za-z0-9_]{1,15}\Z")
@@ -48,13 +49,9 @@ PROFILE_FIELDS = (
     "location_raw",
     "country",
     "utc_offset",
-    "us_state",
     "location_confidence",
     "github_created_at",
     "public_repos_count",
-    "primary_languages",
-    "matched_keywords",
-    "relevant_repository_urls",
     "collection_status",
     "last_checked_at",
 )
@@ -158,7 +155,6 @@ class EnrichmentService:
             raise KeyError(job_id)
         checkpoint = dict(job.get("checkpoint") or {})
         checkpoint["phase"] = "enrichment"
-        keywords = [item.casefold() for item in (job.get("criteria") or {}).get("keywords") or []]
         await self._save_checkpoint(job_id, checkpoint)
 
         while True:
@@ -172,7 +168,7 @@ class EnrichmentService:
                 await self._save_checkpoint(job_id, checkpoint)
                 return "done"
             try:
-                await self._enrich_one(job_id, candidate, keywords)
+                await self._enrich_one(job_id, candidate)
             except RateLimited as exc:
                 control = await self._wait_through_rate_limit(job_id, checkpoint, exc)
                 if control:
@@ -201,7 +197,6 @@ class EnrichmentService:
         job = await self.db.search_jobs.find_one({"_id": job_id})
         if job is None:
             raise KeyError(job_id)
-        keywords = [item.casefold() for item in (job.get("criteria") or {}).get("keywords") or []]
         while True:
             control = await self._control(job_id)
             if control:
@@ -212,7 +207,7 @@ class EnrichmentService:
             if candidate is None:
                 return "done"
             try:
-                await self._enrich_one(job_id, candidate, keywords)
+                await self._enrich_one(job_id, candidate)
             except RateLimited as exc:
                 checkpoint = await self._checkpoint(job_id)
                 control = await self._wait_through_rate_limit(job_id, checkpoint, exc)
@@ -229,11 +224,13 @@ class EnrichmentService:
                     f"Skipped {candidate.get('login')}: {exc}"[:500],
                 )
 
-    async def _enrich_one(self, job_id: str, candidate: dict, keywords: list[str]) -> None:
+    async def _enrich_one(self, job_id: str, candidate: dict) -> None:
         fresh = await self._fresh_copy(candidate)
         if fresh is not None:
             await self._copy_fresh(job_id, candidate, fresh)
             return
+
+        await self.db.contact_evidence.delete_many({"github_user_id": candidate["github_user_id"]})
 
         login = candidate["login"]
         profile_url = candidate.get("profile_url") or f"https://github.com/{login}"
@@ -319,12 +316,8 @@ class EnrichmentService:
                 job_id, "readme_miss", f"No profile README for {login}", {"login": login}
             )
 
-        languages, matched, repo_urls = await self._matching_repos(
-            candidate["github_user_id"],
-            login,
-            keywords,
-            emails,
-        )
+        if not emails and not await self._has_linkedin(candidate["github_user_id"]):
+            await self._recent_repo_readmes(candidate["github_user_id"], login, emails)
         location = normalize_location(profile.get("location"))
         now = utcnow()
         await self.db.candidates.update_one(
@@ -338,18 +331,20 @@ class EnrichmentService:
                     "location_raw": profile.get("location"),
                     "country": location.country,
                     "utc_offset": utc_offset,
-                    "us_state": location.us_state,
                     "location_confidence": location.confidence,
                     "github_created_at": profile.get("created_at"),
                     "public_repos_count": profile.get("public_repos"),
-                    "primary_languages": languages,
-                    "matched_keywords": matched,
-                    "relevant_repository_urls": repo_urls,
                     "enrichment_status": "enriched",
                     "collection_status": "enriched",
                     "last_checked_at": now,
                     "updated_at": now,
-                }
+                },
+                "$unset": {
+                    "us_state": "",
+                    "primary_languages": "",
+                    "matched_keywords": "",
+                    "relevant_repository_urls": "",
+                },
             },
         )
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.enriched": 1}})
@@ -367,7 +362,7 @@ class EnrichmentService:
         text: str,
         source_url: str,
         emails: list[str],
-    ) -> None:
+    ) -> bool:
         published = extract_published_contacts(text)
         for email in published.emails:
             if email not in emails:
@@ -389,63 +384,48 @@ class EnrichmentService:
                 raw_value=url,
                 source_url=source_url,
             )
+        return bool(published.emails)
 
     async def _profile_readme(self, login: str) -> tuple[str | None, str | None]:
         return await self._readme(login, login)
 
-    async def _matching_repos(
-        self,
-        github_user_id: int,
-        login: str,
-        keywords: list[str],
-        emails: list[str],
-    ) -> tuple[list[str], list[str], list[str]]:
+    async def _has_linkedin(self, github_user_id: int) -> bool:
+        found = await self.db.contact_evidence.find_one(
+            {"github_user_id": github_user_id, "kind": "linkedin"},
+            {"_id": 1},
+        )
+        return found is not None
+
+    async def _recent_repo_readmes(
+        self, github_user_id: int, login: str, emails: list[str]
+    ) -> None:
+        """Read at most three recent repository READMEs, and stop on an email."""
+
         response = await self.github.get(
             f"/users/{login}/repos",
             params={"per_page": 100, "type": "owner", "sort": "updated"},
         )
         if response.status_code >= 400:
-            return [], [], []
+            return
+        payload = response.json()
+        if not isinstance(payload, list):
+            return
         owned = [
             repo
-            for repo in response.json() or []
+            for repo in payload
             if isinstance(repo, dict)
             and not repo.get("fork")
             and not repo.get("archived")
             and repo.get("name")
-            and repo.get("html_url")
+            and str(repo["name"]).casefold() != login.casefold()
         ]
-        owned.sort(key=lambda repo: repo.get("pushed_at") or "", reverse=True)
-        owned.sort(key=lambda repo: 0 if _keyword_hits(repo, keywords) else 1)
-
-        languages: list[str] = []
-        matched: list[str] = []
-        urls: list[str] = []
-        email_count = len(emails)
-        scanned = 0
-        for repo in owned:
-            hits = _keyword_hits(repo, keywords)
-            record_match = bool(hits) and len(urls) < MAX_MATCHING_REPOS
-            scan_readme = scanned < MAX_README_REPOS and (
-                record_match or len(emails) == email_count
-            )
-            if not record_match and not scan_readme:
+        owned.sort(key=_repo_updated_at, reverse=True)
+        for repo in owned[:MAX_REPO_READMES]:
+            readme, source = await self._repo_readme(login, str(repo["name"]))
+            if not readme or not source:
                 continue
-            if record_match:
-                language = repo.get("language")
-                if language and language not in languages:
-                    languages.append(language)
-                for hit in hits:
-                    if hit not in matched:
-                        matched.append(hit)
-                urls.append(repo["html_url"])
-            if not scan_readme:
-                continue
-            scanned += 1
-            readme, source = await self._repo_readme(login, repo["name"])
-            if readme and source:
-                await self._store_contacts(github_user_id, readme, source, emails)
-        return languages, matched, urls
+            if await self._store_contacts(github_user_id, readme, source, emails):
+                return
 
     async def _repo_readme(self, login: str, repo: str) -> tuple[str | None, str | None]:
         return await self._readme(login, repo)
@@ -492,7 +472,18 @@ class EnrichmentService:
         copied = {field: fresh.get(field) for field in PROFILE_FIELDS}
         copied["enrichment_status"] = "enriched"
         copied["updated_at"] = now
-        await self.db.candidates.update_one({"_id": candidate["_id"]}, {"$set": copied})
+        await self.db.candidates.update_one(
+            {"_id": candidate["_id"]},
+            {
+                "$set": copied,
+                "$unset": {
+                    "us_state": "",
+                    "primary_languages": "",
+                    "matched_keywords": "",
+                    "relevant_repository_urls": "",
+                },
+            },
+        )
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.enriched": 1}})
         await self._event(
             job_id,
@@ -621,11 +612,9 @@ def _decode_readme(payload: dict, owner: str, repo: str, ref: str) -> tuple[str 
     return decoded.decode("utf-8", errors="replace"), source
 
 
-def _keyword_hits(repo: dict, keywords: list[str]) -> list[str]:
-    language = (repo.get("language") or "").casefold()
-    topics = {str(topic).casefold() for topic in repo.get("topics") or []}
-    hits: list[str] = []
-    for keyword in keywords:
-        if keyword == language or keyword in topics:
-            hits.append(keyword)
-    return hits
+def _repo_updated_at(repo: dict) -> str:
+    for key in ("updated_at", "pushed_at"):
+        value = repo.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""

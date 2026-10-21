@@ -3,8 +3,7 @@ import base64
 import httpx
 import pytest
 
-from app.db import utcnow
-from app.discovery import new_job_document
+from app.discovery import new_job_document, upsert_candidate
 from app.enrichment import (
     EnrichmentService,
     format_utc_offset,
@@ -139,14 +138,15 @@ async def test_enrichment_skips_forks_retries_master_and_keeps_published_email(d
     assert outcome == "done"
     profile_refs = [ref for path, ref in calls if path == "/repos/ada/ada/contents/README.md"]
     assert profile_refs == ["main", "master"]
-    assert any(path == "/repos/ada/tools/contents/README.md" for path, _ref in calls)
     stored = await db.candidates.find_one({"job_id": job_id, "github_user_id": 7})
     assert stored["public_email"] == "ada@example.com"
     assert stored["country"] is None
     assert stored["location_confidence"] == 0.0
-    assert stored["primary_languages"] == ["Python"]
-    assert "https://github.com/ada/tools" in stored["relevant_repository_urls"]
-    assert "https://github.com/ada/forked" not in stored["relevant_repository_urls"]
+    assert "us_state" not in stored
+    assert "primary_languages" not in stored
+    assert "matched_keywords" not in stored
+    assert "relevant_repository_urls" not in stored
+    assert not any(path == "/users/ada/repos" for path, _ref in calls)
     email = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "email"})
     assert email["normalized_value"] == "ada@example.com"
     assert email["source_url"].endswith("/README.md")
@@ -154,90 +154,140 @@ async def test_enrichment_skips_forks_retries_master_and_keeps_published_email(d
     assert website["normalized_value"] == "https://example.com"
 
 
+def _repo(name: str, updated: str, *, fork: bool = False, archived: bool = False) -> dict:
+    return {
+        "name": name,
+        "fork": fork,
+        "archived": archived,
+        "html_url": f"https://github.com/ada/{name}",
+        "updated_at": updated,
+    }
+
+
 @pytest.mark.asyncio
-async def test_repo_readme_email_is_kept_without_keywords(db) -> None:
-    """A location-only search still reads repository READMEs for a published address."""
+async def test_repo_readmes_stop_when_an_email_is_found(db) -> None:
+    """A profile with no email or LinkedIn reads recent READMEs until an address appears."""
+
+    calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path == "/users/jscarton":
+        calls.append(path)
+        if path == "/users/ada":
             return httpx.Response(
                 200,
-                json=_profile(
-                    email=None,
-                    location="Buenos Aires, Argentina",
-                    bio=None,
-                )
-                | {
-                    "login": "jscarton",
-                    "name": "Juan Scarton",
-                    "blog": "https://arepasapp.com",
-                    "company": None,
-                    "public_repos": 57,
-                },
+                json=_profile(email=None, location="Buenos Aires, Argentina", bio=None)
+                | {"blog": "https://arepasapp.com", "company": None, "public_repos": 57},
             )
-        if path == "/users/jscarton/repos":
-            repos = [
-                {
-                    "name": f"recent-{index}",
-                    "fork": False,
-                    "archived": False,
-                    "language": "Go",
-                    "topics": [],
-                    "html_url": f"https://github.com/jscarton/recent-{index}",
-                    "pushed_at": f"2024-12-{index:02d}T00:00:00Z",
-                }
-                for index in range(1, 12)
-            ]
-            repos.append(
-                {
-                    "name": "arepas-commander",
-                    "fork": False,
-                    "archived": False,
-                    "language": "JavaScript",
-                    "topics": [],
-                    "html_url": "https://github.com/jscarton/arepas-commander",
-                    "pushed_at": "2018-02-25T23:48:28Z",
-                }
+        if path == "/users/ada/repos":
+            return httpx.Response(
+                200,
+                json=[
+                    _repo("ada", "2025-08-01T00:00:00Z"),
+                    _repo("newest", "2024-12-03T00:00:00Z"),
+                    _repo("second", "2024-12-02T00:00:00Z"),
+                    _repo("third", "2024-12-01T00:00:00Z"),
+                    _repo("ancient", "2018-02-25T00:00:00Z"),
+                    _repo("forked", "2025-01-01T00:00:00Z", fork=True),
+                    _repo("archived-repo", "2025-06-01T00:00:00Z", archived=True),
+                ],
             )
-            repos.append(
-                {
-                    "name": "forked",
-                    "fork": True,
-                    "archived": False,
-                    "language": "JavaScript",
-                    "topics": [],
-                    "html_url": "https://github.com/jscarton/forked",
-                    "pushed_at": "2025-01-01T00:00:00Z",
-                }
-            )
-            return httpx.Response(200, json=repos)
-        if path == "/repos/jscarton/arepas-commander/readme":
+        if path in {"/repos/ada/newest/readme", "/repos/ada/second/readme"}:
+            return _readme("Utilities.", "HEAD")
+        if path == "/repos/ada/third/readme":
             return _readme("To contact me write me at <jscarton@gmail.com>", "HEAD")
-        if "/forked/" in path:
+        if path in {
+            "/repos/ada/ancient/readme",
+            "/repos/ada/forked/readme",
+            "/repos/ada/archived-repo/readme",
+        }:
             raise AssertionError(path)
         return httpx.Response(404, json={"message": "Not Found"})
 
-    job_id, candidate = await _seed(db, keywords=[])
-    await db.candidates.update_one(
-        {"_id": candidate["_id"]},
-        {"$set": {"login": "jscarton", "profile_url": "https://github.com/jscarton"}},
-    )
+    job_id, _candidate = await _seed(db, keywords=[])
     github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
     assert outcome == "done"
     stored = await db.candidates.find_one({"job_id": job_id, "github_user_id": 7})
-    assert stored["name"] == "Juan Scarton"
     assert stored["country"] == "Argentina"
     assert stored["public_email"] == "jscarton@gmail.com"
     assert stored["collection_status"] == "enriched"
     email = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "email"})
     assert email["normalized_value"] == "jscarton@gmail.com"
-    assert email["source_url"].endswith("/README.md") or "arepas-commander" in email["source_url"]
+    assert email["source_url"].endswith("/README.md")
     website = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "website"})
     assert website["normalized_value"] == "https://arepasapp.com"
+    assert "/repos/ada/newest/readme" in calls
+    assert "/repos/ada/second/readme" in calls
+    assert "/repos/ada/third/readme" in calls
+    assert "/users/ada/repos" in calls
+
+
+@pytest.mark.asyncio
+async def test_repository_readmes_stop_after_three(db) -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append(path)
+        if path == "/users/ada":
+            return httpx.Response(200, json=_profile(email=None, location="Remote", bio=None))
+        if path == "/users/ada/repos":
+            return httpx.Response(
+                200,
+                json=[
+                    _repo("one", "2024-04-01T00:00:00Z"),
+                    _repo("two", "2024-03-01T00:00:00Z"),
+                    _repo("three", "2024-02-01T00:00:00Z"),
+                    _repo("fourth", "2024-01-01T00:00:00Z"),
+                    _repo("forked", "2025-01-01T00:00:00Z", fork=True),
+                ],
+            )
+        if path in {"/repos/ada/fourth/readme", "/repos/ada/forked/readme"}:
+            raise AssertionError(path)
+        if path.endswith("/readme"):
+            return _readme("No address is listed.", "HEAD")
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job_id, _candidate = await _seed(db, keywords=[])
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    stored = await db.candidates.find_one({"github_user_id": 7})
+    assert stored["public_email"] is None
+    assert "/repos/ada/one/readme" in calls
+    assert "/repos/ada/two/readme" in calls
+    assert "/repos/ada/three/readme" in calls
+    assert await db.contact_evidence.count_documents({"github_user_id": 7, "kind": "email"}) == 0
+
+
+@pytest.mark.asyncio
+async def test_profile_linkedin_skips_repository_readmes(db) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/users/ada":
+            profile = _profile(email=None, location="Berlin, Germany", bio=None)
+            profile["blog"] = "https://www.linkedin.com/in/ada"
+            return httpx.Response(200, json=profile)
+        if path == "/users/ada/repos":
+            raise AssertionError(path)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job_id, _candidate = await _seed(db, keywords=[])
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    stored = await db.candidates.find_one({"github_user_id": 7})
+    assert stored["public_email"] is None
+    linkedin = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "linkedin"})
+    assert linkedin["normalized_value"] == "https://www.linkedin.com/in/ada"
+    assert await db.contact_evidence.count_documents({"github_user_id": 7, "kind": "email"}) == 0
 
 
 @pytest.mark.asyncio
@@ -361,40 +411,66 @@ async def test_profile_html_stores_offset_and_keeps_api_email_primary(db) -> Non
 
 
 @pytest.mark.asyncio
-async def test_recent_profile_copies_utc_offset(db) -> None:
+async def test_reenrich_replaces_contact_evidence(db) -> None:
     job_id, _candidate = await _seed(db, keywords=[])
-    other = new_job_document(SearchCriteria(countries=["Germany"]))
-    await db.search_jobs.insert_one(other)
-    await db.candidates.insert_one(
-        {
-            "job_id": other["_id"],
-            "github_user_id": 7,
-            "login": "ada",
-            "profile_url": "https://github.com/ada",
-            "enrichment_status": "enriched",
-            "collection_status": "enriched",
-            "last_checked_at": utcnow(),
-            "name": "Ada Lovelace",
-            "public_email": "ada@example.com",
-            "country": "Brazil",
-            "utc_offset": "-03:00",
-            "location_raw": "Brazil",
-        }
+    await db.contact_evidence.insert_many(
+        [
+            {
+                "github_user_id": 7,
+                "kind": "email",
+                "normalized_value": "old@example.com",
+                "raw_value": "old@example.com",
+                "source_url": "https://github.com/ada",
+                "validation_status": "valid",
+            },
+            {
+                "github_user_id": 7,
+                "kind": "linkedin",
+                "normalized_value": "https://www.linkedin.com/in/old",
+                "raw_value": "https://www.linkedin.com/in/old",
+                "source_url": "https://github.com/ada",
+                "validation_status": "valid",
+            },
+        ]
     )
+    other = new_job_document(SearchCriteria(countries=["Germany"], keywords=[]))
+    other["status"] = "running"
+    other["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
+    await db.search_jobs.insert_one(other)
+    assert (
+        await upsert_candidate(
+            db, other["_id"], {"id": 7, "login": "ada", "html_url": "https://github.com/ada"}
+        )
+        == "already_stored"
+    )
+    other_job = await db.search_jobs.find_one({"_id": other["_id"]})
+    assert other_job["counts"]["discovered"] == 0
+    moved = await db.candidates.find_one({"login": "ada"})
+    assert moved["job_id"] == other["_id"]
+    assert moved["enrichment_status"] == "pending"
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("a fresh profile is copied without another fetch")
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/ada":
+            return httpx.Response(
+                200,
+                json=_profile(email="Ada@Example.com", location="Berlin, Germany"),
+            )
+        if request.url.path == "/users/ada/repos":
+            raise AssertionError(request.url.path)
+        return httpx.Response(404, json={"message": "Not Found"})
 
     github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
-    outcome = await EnrichmentService(db, github).run(job_id)
+    outcome = await EnrichmentService(db, github).run(other["_id"])
     await github.aclose()
 
     assert outcome == "done"
-    stored = await db.candidates.find_one({"job_id": job_id, "github_user_id": 7})
-    assert stored["utc_offset"] == "-03:00"
-    assert stored["name"] == "Ada Lovelace"
-    assert stored["country"] == "Brazil"
-    assert stored["public_email"] == "ada@example.com"
+    emails = await db.contact_evidence.find({"github_user_id": 7, "kind": "email"}).to_list(10)
+    assert [item["normalized_value"] for item in emails] == ["Ada@example.com"]
+    assert await db.contact_evidence.count_documents({"github_user_id": 7, "kind": "linkedin"}) == 0
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["job_id"] == other["_id"]
+    assert stored["public_email"] == "Ada@example.com"
+    assert await db.candidates.count_documents({"job_id": job_id}) == 0
 
 
 @pytest.mark.asyncio

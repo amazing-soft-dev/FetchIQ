@@ -34,19 +34,76 @@ def _budget(document: dict | None) -> dict:
     }
 
 
-def public_job(document: dict) -> dict:
+async def contact_counts(db, job_id: str) -> dict[str, int]:
+    """Count stored emails and usernames that have LinkedIn but no email."""
+
+    candidates = await db.candidates.find(
+        {"job_id": job_id},
+        {"login": 1, "github_user_id": 1},
+    ).to_list(None)
+    user_ids: list[int] = []
+    seen_ids: set[int] = set()
+    for candidate in candidates:
+        user_id = candidate.get("github_user_id")
+        if isinstance(user_id, int) and user_id not in seen_ids:
+            seen_ids.add(user_id)
+            user_ids.append(user_id)
+    if not user_ids:
+        return {"emails": 0, "linkedin_without_email": 0}
+
+    evidence = await db.contact_evidence.find(
+        {"github_user_id": {"$in": user_ids}, "kind": {"$in": ["email", "linkedin"]}},
+        {"github_user_id": 1, "kind": 1},
+    ).to_list(None)
+    emails = 0
+    kinds_by_user: dict[int, set[str]] = {}
+    for item in evidence:
+        user_id = item.get("github_user_id")
+        kind = item.get("kind")
+        if not isinstance(user_id, int) or kind not in {"email", "linkedin"}:
+            continue
+        kinds_by_user.setdefault(user_id, set()).add(kind)
+        if kind == "email":
+            emails += 1
+
+    linkedin_without_email = 0
+    seen_logins: set[str] = set()
+    for candidate in candidates:
+        login = candidate.get("login")
+        if not isinstance(login, str) or not login or login in seen_logins:
+            continue
+        seen_logins.add(login)
+        kinds = kinds_by_user.get(candidate.get("github_user_id"), set())
+        if "linkedin" in kinds and "email" not in kinds:
+            linkedin_without_email += 1
+    return {"emails": emails, "linkedin_without_email": linkedin_without_email}
+
+
+def public_job(document: dict, contact: dict | None = None) -> dict:
+    counts = document.get("counts") or {}
+    report = contact or {"emails": 0, "linkedin_without_email": 0}
     return {
         "id": document["_id"],
         "status": document["status"],
         "criteria": document["criteria"],
         "incomplete": bool(document.get("incomplete")),
         "incomplete_reasons": document.get("incomplete_reasons") or [],
-        "counts": document.get("counts") or {"discovered": 0, "enriched": 0, "errors": 0},
+        "counts": {
+            "discovered": int(counts.get("discovered") or 0),
+            "enriched": int(counts.get("enriched") or 0),
+            "errors": int(counts.get("errors") or 0),
+            "emails": int(report.get("emails") or 0),
+            "linkedin_without_email": int(report.get("linkedin_without_email") or 0),
+        },
         "request_budget": _budget(document.get("request_budget")),
         "error": document.get("error"),
         "created_at": _iso(document.get("created_at")),
         "updated_at": _iso(document.get("updated_at")),
     }
+
+
+async def present_job(db, document: dict) -> dict:
+    return public_job(document, await contact_counts(db, document["_id"]))
 
 
 async def _load(db, job_id: str) -> dict:
@@ -60,12 +117,13 @@ async def _load(db, job_id: str) -> dict:
 async def create_job(body: JobCreate, request: Request) -> dict:
     document = new_job_document(body.criteria)
     await request.app.state.db.search_jobs.insert_one(document)
-    return public_job(document)
+    return await present_job(request.app.state.db, document)
 
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, request: Request) -> dict:
-    return public_job(await _load(request.app.state.db, job_id))
+    db = request.app.state.db
+    return await present_job(db, await _load(db, job_id))
 
 
 @router.get("/jobs/{job_id}/export.csv")
@@ -102,7 +160,7 @@ async def pause_job(job_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, job_id)
     if document["status"] == "paused":
-        return public_job(document)
+        return await present_job(db, document)
     if document["status"] not in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="job cannot be paused")
     if document["status"] == "queued":
@@ -115,7 +173,7 @@ async def pause_job(job_id: str, request: Request) -> dict:
             {"_id": job_id},
             {"$set": {"control": "pause", "updated_at": utcnow()}},
         )
-    return public_job(await _load(db, job_id))
+    return await present_job(db, await _load(db, job_id))
 
 
 @router.post("/jobs/{job_id}/cancel")
@@ -134,7 +192,7 @@ async def cancel_job(job_id: str, request: Request) -> dict:
             {"_id": job_id},
             {"$set": {"status": "cancelled", "control": None, "updated_at": utcnow()}},
         )
-    return public_job(await _load(db, job_id))
+    return await present_job(db, await _load(db, job_id))
 
 
 async def _kick(job_id: str, request: Request, *, allowed: set[str]) -> dict:
@@ -146,4 +204,4 @@ async def _kick(job_id: str, request: Request, *, allowed: set[str]) -> dict:
         await request.app.state.runner.kick(job_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return public_job(await _load(db, job_id))
+    return await present_job(db, await _load(db, job_id))
