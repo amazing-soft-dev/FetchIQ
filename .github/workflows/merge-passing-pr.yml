@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Merge
         env:
-          GH_TOKEN: ${{ secrets.PR_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -eu
