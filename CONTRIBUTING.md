@@ -4,7 +4,15 @@
 
 `dev` is the integration branch. `main` is the release branch. Short-lived branches open into `dev`, and `dev` promotes to `main`.
 
-Run **Start change**, then check out the branch named in the issue, then edit. The workflow is [`.github/workflows/start-change.yml`](.github/workflows/start-change.yml). It creates an empty branch from the latest `dev`:
+Create the issue with `GH_TOKEN` before editing, then branch from the latest `dev`:
+
+```bash
+gh issue create --title "Short summary" --body "What is wrong and what should happen."
+git fetch origin
+git checkout -b fix/<short-description> origin/dev
+```
+
+Use one of these branch prefixes:
 
 - `feat/<short-description>` for user-facing behavior
 - `fix/<short-description>` for bug fixes
@@ -12,7 +20,9 @@ Run **Start change**, then check out the branch named in the issue, then edit. T
 - `ci/<short-description>` for workflow changes
 - `build/<short-description>` for dependency and build setup
 
-Open a pull request into `dev`. Do not push directly to `dev` or `main`. After that pull request is merged and checks pass, open a pull request from `dev` into `main` and merge it with a merge commit.
+Put `Closes #<issue>` in the commit message. Do not push directly to `dev` or `main`.
+
+Pushing the branch runs [`.github/workflows/open-pull-request.yml`](.github/workflows/open-pull-request.yml), which opens the pull request into `dev`. After CI passes, [`.github/workflows/merge-passing-pr.yml`](.github/workflows/merge-passing-pr.yml) merges it. That push to `dev` opens `dev` into `main`, and the merge workflow merges that pull request after CI passes.
 
 ## Commits
 

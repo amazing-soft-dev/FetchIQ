@@ -1,9 +1,14 @@
 name: Open pull request
 
 on:
-  create:
   push:
-    branches: [dev]
+    branches:
+      - dev
+      - feat/**
+      - fix/**
+      - docs/**
+      - ci/**
+      - build/**
   workflow_dispatch:
     inputs:
       branch:
@@ -36,12 +41,9 @@ jobs:
           elif [ "${{ github.ref_name }}" = "dev" ]; then
             head="dev"
             base="main"
-          elif [ "${{ github.event.ref_type }}" = "branch" ]; then
-            head="${{ github.event.ref }}"
-            base="dev"
           else
-            echo "Nothing to open."
-            exit 0
+            head="${{ github.ref_name }}"
+            base="dev"
           fi
 
           case "$head" in
