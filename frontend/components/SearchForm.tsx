@@ -207,16 +207,68 @@ export function SearchForm() {
 
       {error ? <p className="error">{error}</p> : null}
 
-      <ChipMultiSelect
-        key={`countries-${presetVersion}`}
-        label="Location"
-        helper="Select one or more countries or locations"
-        placeholder="Search and add locations..."
-        options={catalog?.countries ?? []}
-        value={criteria.countries}
-        onChange={setCountries}
-        countNoun="location"
-      />
+      <div className="location-age-row">
+        <ChipMultiSelect
+          key={`countries-${presetVersion}`}
+          label="Location"
+          helper="Select one or more countries or locations"
+          placeholder="Search and add locations..."
+          options={catalog?.countries ?? []}
+          value={criteria.countries}
+          onChange={setCountries}
+          countNoun="location"
+        />
+
+        <fieldset className="account-age">
+          <legend>Account age</legend>
+          <div className="age-grid">
+            <label>
+              Minimum years
+              <input
+                type="number"
+                min={0}
+                max={100}
+                placeholder={String(AGE_DEFAULTS.min_years)}
+                value={ageInputs.min_years}
+                onChange={(event) => setAgeInput("min_years", event.target.value)}
+              />
+            </label>
+            <label>
+              Minimum months
+              <input
+                type="number"
+                min={0}
+                max={11}
+                placeholder={String(AGE_DEFAULTS.min_months)}
+                value={ageInputs.min_months}
+                onChange={(event) => setAgeInput("min_months", event.target.value)}
+              />
+            </label>
+            <label>
+              Maximum years
+              <input
+                type="number"
+                min={0}
+                max={100}
+                placeholder={String(AGE_DEFAULTS.max_years)}
+                value={ageInputs.max_years}
+                onChange={(event) => setAgeInput("max_years", event.target.value)}
+              />
+            </label>
+            <label>
+              Maximum months
+              <input
+                type="number"
+                min={0}
+                max={11}
+                placeholder={String(AGE_DEFAULTS.max_months)}
+                value={ageInputs.max_months}
+                onChange={(event) => setAgeInput("max_months", event.target.value)}
+              />
+            </label>
+          </div>
+        </fieldset>
+      </div>
 
       {unitedStatesSelected ? (
         <ChipMultiSelect
@@ -229,56 +281,6 @@ export function SearchForm() {
           countNoun="state"
         />
       ) : null}
-
-      <fieldset>
-        <legend>Account age</legend>
-        <div className="age-grid">
-          <label>
-            Minimum years
-            <input
-              type="number"
-              min={0}
-              max={100}
-              placeholder={String(AGE_DEFAULTS.min_years)}
-              value={ageInputs.min_years}
-              onChange={(event) => setAgeInput("min_years", event.target.value)}
-            />
-          </label>
-          <label>
-            Minimum months
-            <input
-              type="number"
-              min={0}
-              max={11}
-              placeholder={String(AGE_DEFAULTS.min_months)}
-              value={ageInputs.min_months}
-              onChange={(event) => setAgeInput("min_months", event.target.value)}
-            />
-          </label>
-          <label>
-            Maximum years
-            <input
-              type="number"
-              min={0}
-              max={100}
-              placeholder={String(AGE_DEFAULTS.max_years)}
-              value={ageInputs.max_years}
-              onChange={(event) => setAgeInput("max_years", event.target.value)}
-            />
-          </label>
-          <label>
-            Maximum months
-            <input
-              type="number"
-              min={0}
-              max={11}
-              placeholder={String(AGE_DEFAULTS.max_months)}
-              value={ageInputs.max_months}
-              onChange={(event) => setAgeInput("max_months", event.target.value)}
-            />
-          </label>
-        </div>
-      </fieldset>
 
       <label>
         Keywords
