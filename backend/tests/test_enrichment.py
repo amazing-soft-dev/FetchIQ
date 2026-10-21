@@ -291,6 +291,41 @@ async def test_profile_linkedin_skips_repository_readmes(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_email_and_linkedin_skip_the_profile_readme(db) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((str(request.url), request.headers.get("accept", "")))
+        path = request.url.path
+        if request.headers.get("accept") == "text/html":
+            return httpx.Response(
+                200,
+                text='<profile-timezone data-hours-ahead-of-utc="1"></profile-timezone>',
+            )
+        if path == "/users/ada":
+            profile = _profile(email="Ada@Example.com", location="Berlin, Germany")
+            profile["blog"] = "https://www.linkedin.com/in/ada"
+            return httpx.Response(200, json=profile)
+        if "readme" in path.casefold() or path == "/users/ada/repos":
+            raise AssertionError(path)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job_id, _candidate = await _seed(db, keywords=[])
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    outcome = await EnrichmentService(db, github).run(job_id)
+    await github.aclose()
+
+    assert outcome == "done"
+    assert any(url.endswith("/users/ada") for url, _accept in calls)
+    assert any(accept == "text/html" for _url, accept in calls)
+    stored = await db.candidates.find_one({"github_user_id": 7})
+    assert stored["public_email"] == "Ada@example.com"
+    assert stored["utc_offset"] == "+01:00"
+    linkedin = await db.contact_evidence.find_one({"github_user_id": 7, "kind": "linkedin"})
+    assert linkedin["normalized_value"] == "https://www.linkedin.com/in/ada"
+
+
+@pytest.mark.asyncio
 async def test_null_public_email_stays_empty_when_nothing_is_published(db) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
