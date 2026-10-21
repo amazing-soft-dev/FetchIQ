@@ -1,12 +1,13 @@
 """GitHub user search with date splits, checkpoints, and one row per username."""
 
 import asyncio
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from pymongo.errors import DuplicateKeyError
 
+from app.contacts import is_blank
 from app.dates import account_age_window, split_date_window
 from app.db import utcnow
 from app.enrichment import EnrichmentService
@@ -23,6 +24,7 @@ from app.models import SearchCriteria
 SEARCH_RESULT_CAP = 1000
 PAGE_SIZE = 100
 MAX_PAGES = 10
+FRESH_PROFILE = timedelta(days=7)
 
 
 def quote_term(value: str) -> str:
@@ -119,18 +121,27 @@ def _pending_candidate(job_id: str, item: dict[str, Any], profile_url: str, now)
     }
 
 
-async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
-    """Insert or overwrite the one candidate row for this GitHub username.
+def _checked_at(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
-    A username already stored is overwritten. That write is not a new discovery.
-    The same job keeps an enriched profile in place. A later job takes the row
-    and marks it pending so enrichment can replace the contact evidence.
+
+async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
+    """Insert a username once. A later search fills gaps instead of replacing the row.
+
+    An existing username is not a new discovery. A profile checked within seven
+    days is left untouched. An older profile is queued for a merge that fills
+    empty fields and keeps the stored GitHub user id so contact evidence stays
+    attached.
     """
 
     now = utcnow()
     login = item["login"]
     profile_url = item.get("html_url") or f"https://github.com/{login}"
-    existing = await db.candidates.find_one({"login": login}, {"job_id": 1})
+    existing = await db.candidates.find_one({"login": login})
     if existing is not None and existing.get("job_id") == job_id:
         await db.candidates.update_one(
             {"_id": existing["_id"]},
@@ -142,6 +153,22 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
                 },
                 "$unset": _OBSOLETE_CANDIDATE_FIELDS,
             },
+        )
+        return "already_stored"
+    if existing is not None:
+        checked = _checked_at(existing.get("last_checked_at"))
+        if checked is not None and checked >= now - FRESH_PROFILE:
+            return "already_stored"
+        changes: dict[str, Any] = {
+            "job_id": job_id,
+            "enrichment_status": "merge",
+            "updated_at": now,
+        }
+        if is_blank(existing.get("profile_url")):
+            changes["profile_url"] = profile_url
+        await db.candidates.update_one(
+            {"_id": existing["_id"]},
+            {"$set": changes, "$unset": _OBSOLETE_CANDIDATE_FIELDS},
         )
         return "already_stored"
     try:

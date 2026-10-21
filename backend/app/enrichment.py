@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 from pymongo.errors import DuplicateKeyError
 
+from app.contacts import is_blank, latest_valid_email, merge_profile_fields
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
@@ -225,12 +226,17 @@ class EnrichmentService:
                 )
 
     async def _enrich_one(self, job_id: str, candidate: dict) -> None:
-        fresh = await self._fresh_copy(candidate)
-        if fresh is not None:
-            await self._copy_fresh(job_id, candidate, fresh)
-            return
+        merging = candidate.get("enrichment_status") == "merge"
+        if not merging:
+            fresh = await self._fresh_copy(candidate)
+            if fresh is not None:
+                await self._copy_fresh(job_id, candidate, fresh)
+                return
 
-        await self.db.contact_evidence.delete_many({"github_user_id": candidate["github_user_id"]})
+            await self.db.contact_evidence.delete_many(
+                {"github_user_id": candidate["github_user_id"]}
+            )
+        seen_kinds = await self._stored_kinds(candidate["github_user_id"]) if merging else set()
 
         login = candidate["login"]
         profile_url = candidate.get("profile_url") or f"https://github.com/{login}"
@@ -286,67 +292,104 @@ class EnrichmentService:
             profile.get("bio") or "",
             profile_url,
             emails,
+            fill_missing_only=merging,
+            seen_kinds=seen_kinds,
         )
         blog = classify_url(profile.get("blog") or "", prefer_website=True)
         if blog:
-            await upsert_evidence(
-                self.db,
-                github_user_id=candidate["github_user_id"],
-                kind=blog[0],
-                normalized_value=blog[1],
-                raw_value=profile.get("blog") or blog[1],
-                source_url=profile_url,
+            await self._add_contact(
+                candidate["github_user_id"],
+                blog[0],
+                blog[1],
+                profile.get("blog") or blog[1],
+                profile_url,
+                fill_missing_only=merging,
+                seen_kinds=seen_kinds,
             )
         twitter = (profile.get("twitter_username") or "").strip().lstrip("@")
         if TWITTER_NAME.fullmatch(twitter):
-            await upsert_evidence(
-                self.db,
-                github_user_id=candidate["github_user_id"],
-                kind="x",
-                normalized_value=f"https://x.com/{twitter}",
-                raw_value=twitter,
-                source_url=profile_url,
+            await self._add_contact(
+                candidate["github_user_id"],
+                "x",
+                f"https://x.com/{twitter}",
+                twitter,
+                profile_url,
+                fill_missing_only=merging,
+                seen_kinds=seen_kinds,
             )
 
         readme_text, readme_url = await self._profile_readme(login)
         if readme_text and readme_url:
-            await self._store_contacts(candidate["github_user_id"], readme_text, readme_url, emails)
+            await self._store_contacts(
+                candidate["github_user_id"],
+                readme_text,
+                readme_url,
+                emails,
+                fill_missing_only=merging,
+                seen_kinds=seen_kinds,
+            )
         elif readme_url is None and readme_text is None:
             await self._event(
                 job_id, "readme_miss", f"No profile README for {login}", {"login": login}
             )
 
         if not emails and not await self._has_linkedin(candidate["github_user_id"]):
-            await self._recent_repo_readmes(candidate["github_user_id"], login, emails)
+            await self._recent_repo_readmes(
+                candidate["github_user_id"],
+                login,
+                emails,
+                fill_missing_only=merging,
+                seen_kinds=seen_kinds,
+            )
         location = normalize_location(profile.get("location"))
         now = utcnow()
-        await self.db.candidates.update_one(
-            {"_id": candidate["_id"]},
-            {
-                "$set": {
-                    "name": profile.get("name"),
-                    "bio": profile.get("bio"),
-                    "company": profile.get("company"),
-                    "public_email": emails[0] if emails else None,
-                    "location_raw": profile.get("location"),
-                    "country": location.country,
-                    "utc_offset": utc_offset,
-                    "location_confidence": location.confidence,
-                    "github_created_at": profile.get("created_at"),
-                    "public_repos_count": profile.get("public_repos"),
-                    "enrichment_status": "enriched",
-                    "collection_status": "enriched",
-                    "last_checked_at": now,
-                    "updated_at": now,
+        incoming = {
+            "name": profile.get("name"),
+            "bio": profile.get("bio"),
+            "company": profile.get("company"),
+            "public_email": emails[0] if emails else None,
+            "location_raw": profile.get("location"),
+            "country": location.country,
+            "utc_offset": utc_offset,
+            "location_confidence": location.confidence,
+            "github_created_at": profile.get("created_at"),
+            "public_repos_count": profile.get("public_repos"),
+        }
+        obsolete = {
+            "us_state": "",
+            "primary_languages": "",
+            "matched_keywords": "",
+            "relevant_repository_urls": "",
+        }
+        if merging:
+            evidence = await self.db.contact_evidence.find(
+                {"github_user_id": candidate["github_user_id"], "kind": "email"}
+            ).to_list(None)
+            chosen = latest_valid_email(evidence)
+            filled, email_changed = merge_profile_fields(candidate, incoming, chosen)
+            filled["enrichment_status"] = "enriched"
+            filled["last_checked_at"] = now
+            filled["updated_at"] = now
+            if is_blank(candidate.get("collection_status")):
+                filled["collection_status"] = "enriched"
+            update: dict[str, Any] = {"$set": filled, "$unset": obsolete}
+            if email_changed:
+                update["$unset"]["outreach_status"] = ""
+            await self.db.candidates.update_one({"_id": candidate["_id"]}, update)
+        else:
+            await self.db.candidates.update_one(
+                {"_id": candidate["_id"]},
+                {
+                    "$set": {
+                        **incoming,
+                        "enrichment_status": "enriched",
+                        "collection_status": "enriched",
+                        "last_checked_at": now,
+                        "updated_at": now,
+                    },
+                    "$unset": obsolete,
                 },
-                "$unset": {
-                    "us_state": "",
-                    "primary_languages": "",
-                    "matched_keywords": "",
-                    "relevant_repository_urls": "",
-                },
-            },
-        )
+            )
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.enriched": 1}})
 
     async def _public_profile(self, profile_url: str) -> tuple[str | None, list[str]]:
@@ -356,14 +399,45 @@ class EnrichmentService:
         html = response.text
         return parse_utc_offset(html), parse_profile_emails(html)
 
+    async def _stored_kinds(self, github_user_id: int) -> set[str]:
+        cursor = self.db.contact_evidence.find({"github_user_id": github_user_id}, {"kind": 1})
+        return {document["kind"] for document in await cursor.to_list(None) if document.get("kind")}
+
+    async def _add_contact(
+        self,
+        github_user_id: int,
+        kind: str,
+        normalized_value: str,
+        raw_value: str,
+        source_url: str,
+        *,
+        fill_missing_only: bool,
+        seen_kinds: set[str],
+    ) -> None:
+        if fill_missing_only and kind != "email" and kind in seen_kinds:
+            return
+        await upsert_evidence(
+            self.db,
+            github_user_id=github_user_id,
+            kind=kind,
+            normalized_value=normalized_value,
+            raw_value=raw_value,
+            source_url=source_url,
+        )
+        seen_kinds.add(kind)
+
     async def _store_contacts(
         self,
         github_user_id: int,
         text: str,
         source_url: str,
         emails: list[str],
+        *,
+        fill_missing_only: bool = False,
+        seen_kinds: set[str] | None = None,
     ) -> bool:
         published = extract_published_contacts(text)
+        kinds = seen_kinds if seen_kinds is not None else set()
         for email in published.emails:
             if email not in emails:
                 emails.append(email)
@@ -376,13 +450,14 @@ class EnrichmentService:
                 source_url=source_url,
             )
         for kind, url in published.urls:
-            await upsert_evidence(
-                self.db,
-                github_user_id=github_user_id,
-                kind=kind,
-                normalized_value=url,
-                raw_value=url,
-                source_url=source_url,
+            await self._add_contact(
+                github_user_id,
+                kind,
+                url,
+                url,
+                source_url,
+                fill_missing_only=fill_missing_only,
+                seen_kinds=kinds,
             )
         return bool(published.emails)
 
@@ -397,7 +472,13 @@ class EnrichmentService:
         return found is not None
 
     async def _recent_repo_readmes(
-        self, github_user_id: int, login: str, emails: list[str]
+        self,
+        github_user_id: int,
+        login: str,
+        emails: list[str],
+        *,
+        fill_missing_only: bool = False,
+        seen_kinds: set[str] | None = None,
     ) -> None:
         """Read at most three recent repository READMEs, and stop on an email."""
 
@@ -424,7 +505,14 @@ class EnrichmentService:
             readme, source = await self._repo_readme(login, str(repo["name"]))
             if not readme or not source:
                 continue
-            if await self._store_contacts(github_user_id, readme, source, emails):
+            if await self._store_contacts(
+                github_user_id,
+                readme,
+                source,
+                emails,
+                fill_missing_only=fill_missing_only,
+                seen_kinds=seen_kinds,
+            ):
                 return
 
     async def _repo_readme(self, login: str, repo: str) -> tuple[str | None, str | None]:
@@ -493,25 +581,27 @@ class EnrichmentService:
         )
 
     async def _next_candidate(self, job_id: str, after_id: int | None) -> dict | None:
-        query: dict[str, Any] = {"job_id": job_id, "enrichment_status": "pending"}
+        query: dict[str, Any] = {
+            "job_id": job_id,
+            "enrichment_status": {"$in": ["pending", "merge"]},
+        }
         if after_id is not None:
             query["github_user_id"] = {"$gt": after_id}
         return await self.db.candidates.find_one(query, sort=[("github_user_id", 1)])
 
     async def _miss(self, job_id: str, candidate: dict, status: str, message: str) -> None:
         now = utcnow()
-        await self.db.candidates.update_one(
-            {"_id": candidate["_id"]},
-            {
-                "$set": {
-                    "enrichment_status": status,
-                    "collection_status": status,
-                    "last_checked_at": now,
-                    "updated_at": now,
-                    "public_email": None,
-                }
-            },
-        )
+        if candidate.get("enrichment_status") == "merge":
+            changes: dict[str, Any] = {"enrichment_status": "enriched", "updated_at": now}
+        else:
+            changes = {
+                "enrichment_status": status,
+                "collection_status": status,
+                "last_checked_at": now,
+                "updated_at": now,
+                "public_email": None,
+            }
+        await self.db.candidates.update_one({"_id": candidate["_id"]}, {"$set": changes})
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.errors": 1}})
         await self._event(job_id, status, message, {"login": candidate.get("login")})
 

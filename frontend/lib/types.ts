@@ -47,6 +47,49 @@ export type Preset = {
   created_at: string | null;
 };
 
+export type OutreachStatus = {
+  id: string;
+  label: string;
+  position: number;
+};
+
+export type Contact = {
+  login: string;
+  name: string | null;
+  profile_url: string;
+  public_email: string | null;
+  email_kinds: Array<"personal" | "other">;
+  linkedin_url: string | null;
+  country: string | null;
+  outreach_status: string | null;
+  last_checked_at: string | null;
+  job_id: string | null;
+};
+
+export type ContactQuery = {
+  page?: number;
+  page_size?: number;
+  email?: "any" | "has" | "missing";
+  email_kind?: "any" | "personal" | "other";
+  linkedin?: "any" | "has" | "missing";
+  status?: string[];
+  q?: string;
+  job_id?: string;
+};
+
+export type ContactPage = {
+  contacts: Contact[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type JobSummary = {
+  id: string;
+  status: JobStatus;
+  created_at: string | null;
+};
+
 export type GeoCatalog = {
   countries: string[];
   us_states: string[];
