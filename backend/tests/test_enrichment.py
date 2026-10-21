@@ -463,3 +463,42 @@ async def test_bad_profile_url_does_not_stop_the_next_profile(db) -> None:
     stored_job = await db.search_jobs.find_one({"_id": job["_id"]})
     assert stored_job["status"] == "running"
     assert stored_job["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_dns_failure_stays_on_the_same_candidate(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"], keywords=[]))
+    job["status"] = "running"
+    job["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
+    await db.search_jobs.insert_one(job)
+    await db.candidates.insert_one(
+        {
+            "job_id": job["_id"],
+            "github_user_id": 7,
+            "login": "ada",
+            "profile_url": "https://github.com/ada",
+            "enrichment_status": "pending",
+            "collection_status": "discovered",
+            "public_email": None,
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise OSError(11001, "getaddrinfo failed")
+        except OSError as exc:
+            raise httpx.ConnectError("[Errno 11001] getaddrinfo failed", request=request) from exc
+
+    async def sleeper(_seconds: float) -> None:
+        return None
+
+    github = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    with pytest.raises(RuntimeError, match="Could not resolve api.github.com"):
+        await EnrichmentService(db, github).run(job["_id"])
+    await github.aclose()
+
+    stored = await db.candidates.find_one({"github_user_id": 7})
+    stored_job = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["enrichment_status"] == "pending"
+    assert stored_job["counts"]["errors"] == 0
+    assert stored_job["checkpoint"]["last_enriched_user_id"] is None

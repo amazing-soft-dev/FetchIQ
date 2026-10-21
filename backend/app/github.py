@@ -180,6 +180,14 @@ class GitHubClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def _request_host(self, url: str) -> str:
+        """Hostname for this request, with no userinfo, path, or query."""
+
+        host = httpx.URL(url).host
+        if host:
+            return host
+        return self._client.base_url.host or "api.github.com"
+
     async def get(
         self,
         url: str,
@@ -192,7 +200,15 @@ class GitHubClient:
         attempt = 0
         delay = 1.0
         while True:
-            response = await self._client.get(url, params=params, headers=headers)
+            try:
+                response = await self._client.get(url, params=params, headers=headers)
+            except httpx.ConnectError:
+                if attempt < 3:
+                    attempt += 1
+                    await self._sleeper(delay)
+                    delay = min(delay * 2, 30.0)
+                    continue
+                raise RuntimeError(f"Could not resolve {self._request_host(url)}") from None
             if is_rate_limited(response):
                 raise RateLimited(
                     retry_after=retry_after_seconds(response, attempt),
