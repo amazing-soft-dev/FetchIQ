@@ -2,10 +2,10 @@
 
 Commit patches, mail headers, and noreply placeholders are never read. Name,
 location, and public email come from the user API. The profile page contributes
-the UTC offset and a published mailto when one is present. The profile README is
-always read. Repository READMEs are read only when an email and a LinkedIn URL
-are both still missing: at most three recently updated repositories, stopping
-when an email is found.
+the UTC offset and a published mailto when one is present. Those two reads
+run together. The profile README is read only when an email or a LinkedIn URL
+is still missing. Repository READMEs are read only when both are still missing:
+at most three recently updated repositories, stopping when an email is found.
 """
 
 import asyncio
@@ -240,7 +240,10 @@ class EnrichmentService:
 
         login = candidate["login"]
         profile_url = candidate.get("profile_url") or f"https://github.com/{login}"
-        response = await self.github.get(f"/users/{login}")
+        response, (utc_offset, html_emails) = await asyncio.gather(
+            self.github.get(f"/users/{login}"),
+            self._public_profile(profile_url),
+        )
         if response.status_code == 404:
             await self._miss(job_id, candidate, "profile_missing", "Profile was not found")
             return
@@ -252,7 +255,6 @@ class EnrichmentService:
             return
 
         profile = response.json()
-        utc_offset, html_emails = await self._public_profile(profile_url)
         emails: list[str] = []
         api_email = normalize_email(profile.get("email") or "")
         if api_email:
@@ -318,20 +320,24 @@ class EnrichmentService:
                 seen_kinds=seen_kinds,
             )
 
-        readme_text, readme_url = await self._profile_readme(login)
-        if readme_text and readme_url:
-            await self._store_contacts(
-                candidate["github_user_id"],
-                readme_text,
-                readme_url,
-                emails,
-                fill_missing_only=merging,
-                seen_kinds=seen_kinds,
-            )
-        elif readme_url is None and readme_text is None:
-            await self._event(
-                job_id, "readme_miss", f"No profile README for {login}", {"login": login}
-            )
+        user_id = candidate["github_user_id"]
+        has_email = await self._has_contact(user_id, "email")
+        has_linkedin = await self._has_contact(user_id, "linkedin")
+        if not has_email or not has_linkedin:
+            readme_text, readme_url = await self._profile_readme(login)
+            if readme_text and readme_url:
+                await self._store_contacts(
+                    candidate["github_user_id"],
+                    readme_text,
+                    readme_url,
+                    emails,
+                    fill_missing_only=merging,
+                    seen_kinds=seen_kinds,
+                )
+            elif readme_url is None and readme_text is None:
+                await self._event(
+                    job_id, "readme_miss", f"No profile README for {login}", {"login": login}
+                )
 
         if not emails and not await self._has_linkedin(candidate["github_user_id"]):
             await self._recent_repo_readmes(
@@ -464,12 +470,15 @@ class EnrichmentService:
     async def _profile_readme(self, login: str) -> tuple[str | None, str | None]:
         return await self._readme(login, login)
 
-    async def _has_linkedin(self, github_user_id: int) -> bool:
+    async def _has_contact(self, github_user_id: int, kind: str) -> bool:
         found = await self.db.contact_evidence.find_one(
-            {"github_user_id": github_user_id, "kind": "linkedin"},
+            {"github_user_id": github_user_id, "kind": kind},
             {"_id": 1},
         )
         return found is not None
+
+    async def _has_linkedin(self, github_user_id: int) -> bool:
+        return await self._has_contact(github_user_id, "linkedin")
 
     async def _recent_repo_readmes(
         self,
