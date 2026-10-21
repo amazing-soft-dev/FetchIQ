@@ -130,3 +130,56 @@ async def test_missing_token_does_not_call_github() -> None:
     with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
         await client.get("/user")
     await client.aclose()
+
+
+def _raise_dns_failure(request: httpx.Request) -> None:
+    try:
+        raise OSError(11001, "getaddrinfo failed")
+    except OSError as exc:
+        raise httpx.ConnectError("[Errno 11001] getaddrinfo failed", request=request) from exc
+
+
+@pytest.mark.asyncio
+async def test_connect_error_retries_then_succeeds() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            _raise_dns_failure(request)
+        return httpx.Response(200, json={"ok": True})
+
+    sleeps: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    response = await client.get("/users/octocat")
+    assert response.status_code == 200
+    assert calls["count"] == 2
+    assert sleeps == [1.0]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_connect_error_names_the_host() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        _raise_dns_failure(request)
+        return httpx.Response(200, json={"ok": True})
+
+    sleeps: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    with pytest.raises(RuntimeError, match="Could not resolve api.github.com") as caught:
+        await client.get("/users/octocat")
+    assert "test-token" not in str(caught.value)
+    assert calls["count"] == 4
+    assert sleeps == [1.0, 2.0, 4.0]
+    await client.aclose()

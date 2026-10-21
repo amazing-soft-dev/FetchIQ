@@ -13,6 +13,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
+import httpx
 from pymongo.errors import DuplicateKeyError
 
 from app.db import utcnow
@@ -178,6 +179,8 @@ class EnrichmentService:
                     await self._finish_control(job_id, control, checkpoint)
                     return control
                 continue
+            except (RuntimeError, httpx.ConnectError):
+                raise
             except Exception as exc:
                 await self._miss(
                     job_id,
@@ -216,6 +219,8 @@ class EnrichmentService:
                 if control:
                     await self._finish_control(job_id, control, checkpoint)
                     return control
+            except (RuntimeError, httpx.ConnectError):
+                raise
             except Exception as exc:
                 await self._miss(
                     job_id,
