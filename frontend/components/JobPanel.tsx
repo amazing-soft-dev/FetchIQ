@@ -122,7 +122,9 @@ export function JobPanel({ jobId }: { jobId: string }) {
                 Pause
               </button>
             ) : null}
-            {job.status === "paused" || job.status === "incomplete" ? (
+            {job.status === "paused" ||
+            job.status === "incomplete" ||
+            (job.status === "failed" && (job.error ?? "").startsWith("Could not resolve")) ? (
               <button type="button" disabled={busy} onClick={() => void act("resume")}>
                 Resume
               </button>

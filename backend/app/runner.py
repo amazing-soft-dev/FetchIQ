@@ -8,6 +8,13 @@ from app.enrichment import EnrichmentService
 from app.github import RATE_LIMIT_STEP_SECONDS, GitHubClient
 
 
+def _network_hold(job: dict) -> bool:
+    """A failed lookup can be resumed. The checkpoint is still on the job."""
+
+    error = str(job.get("error") or "")
+    return job.get("status") == "failed" and error.startswith("Could not resolve")
+
+
 class JobRunner:
     def __init__(self, db, github: GitHubClient, sleeper=None) -> None:
         self.db = db
@@ -19,11 +26,18 @@ class JobRunner:
         job = await self.db.search_jobs.find_one({"_id": job_id})
         if job is None:
             raise KeyError(job_id)
-        if job["status"] in {"succeeded", "failed", "cancelled"}:
+        if job["status"] in {"succeeded", "failed", "cancelled"} and not _network_hold(job):
             raise RuntimeError("job is finished")
         await self.db.search_jobs.update_one(
             {"_id": job_id},
-            {"$set": {"status": "running", "control": None, "updated_at": utcnow()}},
+            {
+                "$set": {
+                    "status": "running",
+                    "control": None,
+                    "error": None,
+                    "updated_at": utcnow(),
+                }
+            },
         )
         current = self._tasks.get(job_id)
         if current is not None and not current.done():
@@ -111,12 +125,14 @@ class JobRunner:
             status = "incomplete" if job and job.get("incomplete") else "succeeded"
             await self.db.search_jobs.update_one(
                 {"_id": job_id},
-                {"$set": {"status": status, "updated_at": utcnow()}},
+                {"$set": {"status": status, "error": None, "updated_at": utcnow()}},
             )
         except Exception as exc:
+            message = str(exc)[:500]
+            status = "incomplete" if message.startswith("Could not resolve") else "failed"
             await self.db.search_jobs.update_one(
                 {"_id": job_id},
-                {"$set": {"status": "failed", "error": str(exc)[:500], "updated_at": utcnow()}},
+                {"$set": {"status": status, "error": message, "updated_at": utcnow()}},
             )
             await self.db.job_events.insert_one(
                 {

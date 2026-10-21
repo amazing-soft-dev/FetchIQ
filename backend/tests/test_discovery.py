@@ -612,4 +612,134 @@ async def test_job_payload_counts_emails_and_linkedin_without_email(db) -> None:
 
     assert payload["counts"]["emails"] == 3
     assert payload["counts"]["linkedin_without_email"] == 1
-    assert payload["counts"]["discovered"] == 0
+    assert payload["counts"]["discovered"] == 3
+    assert payload["counts"]["enriched"] == 0
+
+
+def _raise_dns_failure(request: httpx.Request) -> None:
+    try:
+        raise OSError(11001, "getaddrinfo failed")
+    except OSError as exc:
+        raise httpx.ConnectError("[Errno 11001] getaddrinfo failed", request=request) from exc
+
+
+@pytest.mark.asyncio
+async def test_job_panel_counts_the_rows_on_the_job(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    job["counts"] = {"discovered": 99, "enriched": 40, "errors": 2}
+    await db.search_jobs.insert_one(job)
+    await db.candidates.insert_many(
+        [
+            {
+                "job_id": job["_id"],
+                "github_user_id": 7,
+                "login": "ada",
+                "enrichment_status": "enriched",
+            },
+            {
+                "job_id": job["_id"],
+                "github_user_id": 8,
+                "login": "grace",
+                "enrichment_status": "pending",
+            },
+            {
+                "job_id": "other-job",
+                "github_user_id": 9,
+                "login": "moved",
+                "enrichment_status": "enriched",
+            },
+        ]
+    )
+    app, _runner, github = _stack(
+        db,
+        lambda _request: httpx.Response(500, json={"message": "should not be called"}),
+    )
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            payload = (await client.get(f"/api/jobs/{job['_id']}")).json()
+    await github.aclose()
+
+    assert payload["counts"]["discovered"] == 2
+    assert payload["counts"]["enriched"] == 1
+    assert payload["counts"]["errors"] == 2
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["counts"]["discovered"] == 99
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_stops_incomplete_and_resume_continues(db) -> None:
+    state = {"down": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if state["down"]:
+            _raise_dns_failure(request)
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    app, runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/jobs",
+                json={"criteria": _criteria(candidate_limit=5)},
+            )
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            stopped = (await client.get(f"/api/jobs/{job_id}")).json()
+            assert stopped["status"] == "incomplete"
+            assert stopped["incomplete"] is False
+            assert stopped["error"].startswith("Could not resolve")
+            stored = await db.search_jobs.find_one({"_id": job_id})
+            assert stored["checkpoint"]["phase"] == "discovery"
+            assert stored["checkpoint"]["windows"]
+
+            state["down"] = False
+            resumed = await client.post(f"/api/jobs/{job_id}/resume")
+            assert resumed.status_code == 200
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+
+    assert finished["status"] == "succeeded"
+    assert finished["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_failed_resolve_job_can_resume(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=5))
+    job["status"] = "failed"
+    job["error"] = "Could not resolve api.github.com"
+    job["checkpoint"] = {
+        "phase": "discovery",
+        "windows": [
+            {
+                "start": "2024-01-01",
+                "end": "2024-01-02",
+                "next_url": None,
+                "pages_fetched": 0,
+            }
+        ],
+    }
+    await db.search_jobs.insert_one(job)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    app, runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resumed = await client.post(f"/api/jobs/{job['_id']}/resume")
+            assert resumed.status_code == 200
+            assert resumed.json()["error"] is None
+            await runner._tasks[job["_id"]]
+            finished = (await client.get(f"/api/jobs/{job['_id']}")).json()
+    await github.aclose()
+    assert finished["status"] == "succeeded"
+    assert finished["error"] is None

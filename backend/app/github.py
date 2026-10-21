@@ -8,6 +8,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 RATE_LIMIT_STEP_SECONDS = 1.0
+CONNECT_RETRY_DELAYS = (60, 120, 300)
 
 
 class RateLimited(Exception):
@@ -197,27 +198,27 @@ class GitHubClient:
     ) -> httpx.Response:
         if not self._token:
             raise RuntimeError("GITHUB_TOKEN is required")
-        attempt = 0
+        connect_tries = 0
+        server_tries = 0
         delay = 1.0
         while True:
             try:
                 response = await self._client.get(url, params=params, headers=headers)
             except httpx.ConnectError:
-                if attempt < 3:
-                    attempt += 1
-                    await self._sleeper(delay)
-                    delay = min(delay * 2, 30.0)
+                if connect_tries < len(CONNECT_RETRY_DELAYS):
+                    await self._sleeper(CONNECT_RETRY_DELAYS[connect_tries])
+                    connect_tries += 1
                     continue
                 raise RuntimeError(f"Could not resolve {self._request_host(url)}") from None
             if is_rate_limited(response):
                 raise RateLimited(
-                    retry_after=retry_after_seconds(response, attempt),
+                    retry_after=retry_after_seconds(response, server_tries),
                     reset_at=_reset_at(response),
                     limit=_optional_int(response.headers.get("x-ratelimit-limit")),
                     remaining=_optional_int(response.headers.get("x-ratelimit-remaining")),
                 )
-            if response.status_code >= 500 and attempt < 3:
-                attempt += 1
+            if response.status_code >= 500 and server_tries < 3:
+                server_tries += 1
                 await self._sleeper(delay)
                 delay = min(delay * 2, 30.0)
                 continue

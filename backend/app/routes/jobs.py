@@ -34,6 +34,16 @@ def _budget(document: dict | None) -> dict:
     }
 
 
+async def progress_counts(db, job_id: str) -> dict[str, int]:
+    """Profiles stored on this job, not the historical insert counter."""
+
+    discovered = await db.candidates.count_documents({"job_id": job_id})
+    enriched = await db.candidates.count_documents(
+        {"job_id": job_id, "enrichment_status": "enriched"}
+    )
+    return {"discovered": int(discovered), "enriched": int(enriched)}
+
+
 async def contact_counts(db, job_id: str) -> dict[str, int]:
     """Count stored emails and usernames that have LinkedIn but no email."""
 
@@ -79,9 +89,14 @@ async def contact_counts(db, job_id: str) -> dict[str, int]:
     return {"emails": emails, "linkedin_without_email": linkedin_without_email}
 
 
-def public_job(document: dict, contact: dict | None = None) -> dict:
+def public_job(
+    document: dict,
+    contact: dict | None = None,
+    progress: dict | None = None,
+) -> dict:
     counts = document.get("counts") or {}
     report = contact or {"emails": 0, "linkedin_without_email": 0}
+    live = progress or {}
     return {
         "id": document["_id"],
         "status": document["status"],
@@ -89,8 +104,8 @@ def public_job(document: dict, contact: dict | None = None) -> dict:
         "incomplete": bool(document.get("incomplete")),
         "incomplete_reasons": document.get("incomplete_reasons") or [],
         "counts": {
-            "discovered": int(counts.get("discovered") or 0),
-            "enriched": int(counts.get("enriched") or 0),
+            "discovered": int(live.get("discovered", counts.get("discovered") or 0)),
+            "enriched": int(live.get("enriched", counts.get("enriched") or 0)),
             "errors": int(counts.get("errors") or 0),
             "emails": int(report.get("emails") or 0),
             "linkedin_without_email": int(report.get("linkedin_without_email") or 0),
@@ -103,7 +118,12 @@ def public_job(document: dict, contact: dict | None = None) -> dict:
 
 
 async def present_job(db, document: dict) -> dict:
-    return public_job(document, await contact_counts(db, document["_id"]))
+    job_id = document["_id"]
+    return public_job(
+        document,
+        await contact_counts(db, job_id),
+        await progress_counts(db, job_id),
+    )
 
 
 async def _load(db, job_id: str) -> dict:
@@ -217,7 +237,10 @@ async def cancel_job(job_id: str, request: Request) -> dict:
 async def _kick(job_id: str, request: Request, *, allowed: set[str]) -> dict:
     db = request.app.state.db
     document = await _load(db, job_id)
-    if document["status"] not in allowed:
+    held = document["status"] == "failed" and str(document.get("error") or "").startswith(
+        "Could not resolve"
+    )
+    if document["status"] not in allowed and not held:
         raise HTTPException(status_code=409, detail="job cannot be started")
     try:
         await request.app.state.runner.kick(job_id)

@@ -158,7 +158,7 @@ async def test_connect_error_retries_then_succeeds() -> None:
     response = await client.get("/users/octocat")
     assert response.status_code == 200
     assert calls["count"] == 2
-    assert sleeps == [1.0]
+    assert sleeps == [60.0]
     await client.aclose()
 
 
@@ -181,5 +181,5 @@ async def test_connect_error_names_the_host() -> None:
         await client.get("/users/octocat")
     assert "test-token" not in str(caught.value)
     assert calls["count"] == 4
-    assert sleeps == [1.0, 2.0, 4.0]
+    assert sleeps == [60.0, 120.0, 300.0]
     await client.aclose()
