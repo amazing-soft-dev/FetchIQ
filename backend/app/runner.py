@@ -70,14 +70,15 @@ class JobRunner:
         job = await self.db.search_jobs.find_one({"_id": job_id}, {"request_budget": 1})
         budget = (job or {}).get("request_budget") or {}
         wait = 0.0
+        remaining_requests = budget.get("remaining")
         reset_at = budget.get("reset_at")
-        if reset_at is not None:
+        if remaining_requests == 0 and reset_at is not None:
             if reset_at.tzinfo is None:
                 reset_at = reset_at.replace(tzinfo=utcnow().tzinfo)
             remaining_reset = (reset_at - utcnow()).total_seconds()
             if remaining_reset > 0:
                 wait = remaining_reset
-        else:
+        if wait == 0.0:
             retry = budget.get("retry_after_seconds")
             if isinstance(retry, int | float) and retry > 0:
                 wait = float(retry)
