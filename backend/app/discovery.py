@@ -42,14 +42,14 @@ def location_seeds(criteria: SearchCriteria) -> list[str]:
     return seeds
 
 
-def build_user_query(criteria: SearchCriteria, start: date, end: date) -> str:
-    parts: list[str] = []
-    seeds = location_seeds(criteria)
-    if seeds:
-        locations = " OR ".join(f"location:{quote_term(seed)}" for seed in seeds)
-        parts.append(f"({locations})" if len(seeds) > 1 else locations)
-    parts.append(f"created:{start.isoformat()}..{end.isoformat()}")
-    parts.append("type:user")
+def build_user_query(criteria: SearchCriteria, start: date, end: date, location: str) -> str:
+    """One location per query. GitHub user search returns nothing for a location OR."""
+
+    parts = [
+        f"location:{quote_term(location)}",
+        f"created:{start.isoformat()}..{end.isoformat()}",
+        "type:user",
+    ]
     for keyword in criteria.keywords:
         if any(character.isspace() for character in keyword):
             parts.append(quote_term(keyword))
@@ -81,10 +81,11 @@ def new_job_document(criteria: SearchCriteria) -> dict[str, Any]:
     }
 
 
-def _window(start: date, end: date) -> dict[str, Any]:
+def _window(start: date, end: date, location: str) -> dict[str, Any]:
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
+        "location": location,
         "next_url": None,
         "pages_fetched": 0,
     }
@@ -214,7 +215,10 @@ class DiscoveryService:
                 max_months=criteria.account_age.max_months,
                 today=self.today,
             )
-            checkpoint = {"phase": "discovery", "windows": [_window(start, end)]}
+            checkpoint = {
+                "phase": "discovery",
+                "windows": [_window(start, end, seed) for seed in location_seeds(criteria)],
+            }
             await self._save_checkpoint(job_id, checkpoint)
 
         discovered = int((job.get("counts") or {}).get("discovered") or 0)
@@ -234,6 +238,11 @@ class DiscoveryService:
             window = dict(windows[0])
             start = date.fromisoformat(window["start"])
             end = date.fromisoformat(window["end"])
+            if not window.get("location"):
+                expanded = [_window(start, end, seed) for seed in location_seeds(criteria)]
+                checkpoint["windows"] = [*expanded, *windows[1:]]
+                await self._save_checkpoint(job_id, checkpoint)
+                continue
             try:
                 response = await self._fetch(window, criteria, start, end)
             except RateLimited as exc:
@@ -264,7 +273,12 @@ class DiscoveryService:
                 halves = split_date_window(start, end)
                 if halves is not None:
                     left, right = halves
-                    checkpoint["windows"] = [_window(*left), _window(*right), *windows[1:]]
+                    location = str(window["location"])
+                    checkpoint["windows"] = [
+                        _window(*left, location),
+                        _window(*right, location),
+                        *windows[1:],
+                    ]
                     await self._save_checkpoint(job_id, checkpoint)
                     await self._event(
                         job_id,
@@ -325,7 +339,7 @@ class DiscoveryService:
     async def _fetch(self, window: dict, criteria: SearchCriteria, start: date, end: date):
         if window.get("next_url"):
             return await self.github.get(window["next_url"])
-        query = build_user_query(criteria, start, end)
+        query = build_user_query(criteria, start, end, str(window["location"]))
         return await self.github.get("/search/users", params={"q": query, "per_page": PAGE_SIZE})
 
     async def _control(self, job_id: str) -> str | None:

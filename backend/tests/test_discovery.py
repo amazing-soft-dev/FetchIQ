@@ -80,15 +80,21 @@ def test_query_seeds_location_created_window_and_keywords() -> None:
         keywords=["python", "web assembly"],
         candidate_limit=10,
     )
-    query = build_user_query(criteria, date(2022, 1, 31), date(2023, 1, 31))
-    assert 'location:"Oregon"' in query
-    assert 'location:"Texas"' in query
-    assert 'location:"United States"' not in query
-    assert 'location:"Germany"' in query
-    assert "created:2022-01-31..2023-01-31" in query
-    assert "type:user" in query
-    assert "python" in query
-    assert '"web assembly"' in query
+    span = (date(2022, 1, 31), date(2023, 1, 31))
+    queries = {
+        location: build_user_query(criteria, *span, location)
+        for location in ("Germany", "Oregon", "Texas")
+    }
+    assert 'location:"Germany"' in queries["Germany"]
+    assert 'location:"Oregon"' in queries["Oregon"]
+    assert 'location:"Texas"' in queries["Texas"]
+    for query in queries.values():
+        assert " OR " not in query
+        assert 'location:"United States"' not in query
+        assert "created:2022-01-31..2023-01-31" in query
+        assert "type:user" in query
+        assert "python" in query
+        assert '"web assembly"' in query
 
 
 def test_criteria_rejects_reversed_age_unknown_places_and_states_without_us() -> None:
@@ -743,3 +749,66 @@ async def test_failed_resolve_job_can_resume(db) -> None:
     await github.aclose()
     assert finished["status"] == "succeeded"
     assert finished["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_each_country_is_searched_on_its_own(db) -> None:
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        query = request.url.params["q"]
+        queries.append(query)
+        if 'location:"Germany"' in query:
+            return httpx.Response(200, json={"total_count": 1, "items": [_user(1, "ada")]})
+        if 'location:"France"' in query:
+            return httpx.Response(200, json={"total_count": 1, "items": [_user(2, "grace")]})
+        raise AssertionError(query)
+
+    _job_id, payload, _runner = await _create_and_run(
+        db,
+        handler,
+        _criteria(countries=["Germany", "France"], candidate_limit=10),
+    )
+    assert payload["status"] == "succeeded"
+    assert payload["counts"]["discovered"] == 2
+    assert len(queries) == 2
+    assert all(" OR " not in query for query in queries)
+    assert any('location:"Germany"' in query for query in queries)
+    assert any('location:"France"' in query for query in queries)
+
+
+@pytest.mark.asyncio
+async def test_remaining_search_budget_does_not_sleep_until_reset(db) -> None:
+    sleeps: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    reset = int(datetime.now(UTC).timestamp()) + 60
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "x-ratelimit-limit": "30",
+                "x-ratelimit-remaining": "29",
+                "x-ratelimit-reset": str(reset),
+            },
+            json={"total_count": 0, "items": []},
+        )
+
+    app, runner, github = _stack(db, handler, sleeper=sleeper)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            job_id = created.json()["id"]
+            await client.post(f"/api/jobs/{job_id}/start")
+            await runner._tasks[job_id]
+            finished = (await client.get(f"/api/jobs/{job_id}")).json()
+    await github.aclose()
+
+    assert finished["status"] == "succeeded"
+    assert sum(sleeps) < 30
