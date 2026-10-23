@@ -1,8 +1,11 @@
-"""Plain-text placeholders and one SMTP delivery."""
+"""Plain-text placeholders, one SMTP delivery, and a copy in Sent."""
 
+import imaplib
 import re
 import smtplib
+from datetime import UTC, datetime
 from email.message import EmailMessage
+from email.utils import format_datetime, make_msgid
 from typing import Protocol
 
 from app.config import Settings
@@ -26,6 +29,10 @@ class MailFailure(Exception):
         self.stop = stop
 
 
+class CopyFailure(Exception):
+    """The message was accepted, but the Sent copy was not stored."""
+
+
 class Mailer(Protocol):
     def configured(self) -> bool:
         """True when a mailbox can accept messages."""
@@ -33,8 +40,18 @@ class Mailer(Protocol):
     def check(self) -> dict:
         """Log in without sending a message."""
 
-    def send(self, *, recipient: str, subject: str, body: str) -> None:
-        """Deliver one plain-text message."""
+    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+        """Deliver one plain-text message. Return a Sent-copy error, if the copy failed."""
+
+    def save_copy(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        sent_at: datetime | None,
+    ) -> None:
+        """File an already accepted message in Sent. Do not send it."""
 
 
 def unknown_placeholders(*templates: str) -> list[str]:
@@ -112,6 +129,159 @@ def _with_mailbox(settings: Settings, connect, action) -> None:
         raise MailFailure("Could not connect to the mail server.", stop=True) from exc
 
 
+_SENT_FALLBACK = ("INBOX.Sent", "Sent", "Sent Items")
+_QUOTED_NAME = re.compile(r'"((?:\\.|[^"])*)"\s*$')
+
+
+def _message(
+    settings: Settings,
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    sent_at: datetime | None = None,
+) -> EmailMessage:
+    message = EmailMessage()
+    message["From"] = settings.smtp_from
+    message["To"] = recipient
+    message["Subject"] = subject
+    stamp = sent_at or datetime.now(UTC)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    message["Date"] = format_datetime(stamp)
+    message["Message-ID"] = make_msgid()
+    message.set_content(body)
+    return message
+
+
+def _imap_connect(settings: Settings):
+    if settings.imap_ssl:
+        return imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port, timeout=30)
+    return imaplib.IMAP4(settings.imap_host, settings.imap_port, timeout=30)
+
+
+def _folder_name(entry: object) -> tuple[str, str]:
+    if isinstance(entry, tuple):
+        entry = entry[0] if entry else b""
+    text = entry.decode("utf-8", "replace") if isinstance(entry, bytes) else str(entry)
+    flags = ""
+    if text.startswith("("):
+        end = text.find(")")
+        if end != -1:
+            flags = text[: end + 1]
+    quoted = _QUOTED_NAME.search(text)
+    if quoted:
+        name = quoted.group(1).replace(r"\"", '"')
+    else:
+        parts = text.split()
+        name = parts[-1] if parts else ""
+    return flags, name
+
+
+def _internaldate(stamp: datetime) -> str:
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone(UTC).strftime('"%d-%b-%Y %H:%M:%S +0000"')
+
+
+def _sent_folder(entries: list | None) -> str:
+    names: list[str] = []
+    for entry in entries or []:
+        if entry is None:
+            continue
+        flags, name = _folder_name(entry)
+        if not name:
+            continue
+        names.append(name)
+        if re.search(r"\\Sent\b", flags):
+            return name
+    for candidate in _SENT_FALLBACK:
+        if candidate in names:
+            return candidate
+    raise CopyFailure("The mailbox has no Sent folder.")
+
+
+def _with_imap(settings: Settings, connect, action):
+    opener = connect or _imap_connect
+    try:
+        client = opener(settings)
+    except (TimeoutError, OSError) as exc:
+        raise CopyFailure("Could not connect to the mail server.") from exc
+    try:
+        try:
+            client.login(settings.smtp_username, settings.smtp_password)
+        except imaplib.IMAP4.error as exc:
+            raise CopyFailure("The mail server refused the mailbox login.") from exc
+        except (TimeoutError, OSError) as exc:
+            raise CopyFailure("Could not connect to the mail server.") from exc
+        return action(client)
+    finally:
+        logout = getattr(client, "logout", None)
+        if logout is not None:
+            try:
+                logout()
+            except (imaplib.IMAP4.error, OSError, TimeoutError):
+                pass
+
+
+def _read_sent_folder(client) -> str:
+    try:
+        typ, data = client.list()
+    except imaplib.IMAP4.error as exc:
+        raise CopyFailure("Could not read the mailbox folders.") from exc
+    if typ != "OK":
+        raise CopyFailure("Could not read the mailbox folders.")
+    return _sent_folder(data)
+
+
+def append_message(
+    settings: Settings,
+    message: EmailMessage,
+    *,
+    connect=None,
+    sent_at: datetime | None = None,
+) -> str:
+    """Upload one message to Sent. Return the folder name."""
+
+    raw = message.as_bytes()
+    internaldate = _internaldate(sent_at or datetime.now(UTC))
+
+    def action(client) -> str:
+        folder = _read_sent_folder(client)
+        try:
+            status, _ = client.append(folder, "\\Seen", internaldate, raw)
+        except imaplib.IMAP4.error as exc:
+            raise CopyFailure("Could not save the message in Sent.") from exc
+        if status != "OK":
+            raise CopyFailure("Could not save the message in Sent.")
+        return folder
+
+    return _with_imap(settings, connect, action)
+
+
+def save_copy(
+    settings: Settings,
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    sent_at: datetime | None,
+    connect=None,
+) -> None:
+    """File one already accepted message. No SMTP connection is opened."""
+
+    if not mail_configured(settings):
+        raise CopyFailure("Mail is not configured.")
+    message = _message(
+        settings,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        sent_at=sent_at,
+    )
+    append_message(settings, message, connect=connect, sent_at=sent_at)
+
+
 def send_message(
     settings: Settings,
     *,
@@ -119,19 +289,24 @@ def send_message(
     subject: str,
     body: str,
     connect=None,
-) -> None:
-    """Send one message. Authentication and connection errors stop the campaign."""
+    imap_connect=None,
+) -> str | None:
+    """Send one message. Authentication and connection errors stop the campaign.
 
-    message = EmailMessage()
-    message["From"] = settings.smtp_from
-    message["To"] = recipient
-    message["Subject"] = subject
-    message.set_content(body)
+    A Sent-copy failure is returned and does not stop the campaign.
+    """
+
+    message = _message(settings, recipient=recipient, subject=subject, body=body)
     _with_mailbox(settings, connect, lambda client: client.send_message(message))
+    try:
+        append_message(settings, message, connect=imap_connect)
+    except CopyFailure as exc:
+        return str(exc)[:300]
+    return None
 
 
-def check_mailbox(settings: Settings, *, connect=None) -> dict:
-    """Log in and report the mailbox. No message is sent."""
+def check_mailbox(settings: Settings, *, connect=None, imap_connect=None) -> dict:
+    """Log into SMTP and IMAP. No message is sent."""
 
     if not mail_configured(settings):
         return {"ok": False, "detail": "Mail is not configured."}
@@ -139,11 +314,16 @@ def check_mailbox(settings: Settings, *, connect=None) -> dict:
         _with_mailbox(settings, connect, lambda client: None)
     except MailFailure as exc:
         return {"ok": False, "detail": str(exc)}
+    try:
+        folder = _with_imap(settings, imap_connect, _read_sent_folder)
+    except CopyFailure as exc:
+        return {"ok": False, "detail": str(exc)}
     return {
         "ok": True,
         "from": settings.smtp_from.strip(),
         "host": settings.smtp_host,
         "port": settings.smtp_port,
+        "sent_folder": folder,
     }
 
 
@@ -157,5 +337,21 @@ class SmtpMailer:
     def check(self) -> dict:
         return check_mailbox(self.settings)
 
-    def send(self, *, recipient: str, subject: str, body: str) -> None:
-        send_message(self.settings, recipient=recipient, subject=subject, body=body)
+    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+        return send_message(self.settings, recipient=recipient, subject=subject, body=body)
+
+    def save_copy(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        sent_at: datetime | None,
+    ) -> None:
+        save_copy(
+            self.settings,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            sent_at=sent_at,
+        )

@@ -26,18 +26,29 @@ def _candidate(login: str, email: str | None, **extra) -> dict:
 
 
 class FakeMailer:
-    def __init__(self, refuse: set[str] | None = None, stop: bool = False) -> None:
+    def __init__(
+        self,
+        refuse: set[str] | None = None,
+        stop: bool = False,
+        copy_error: str | None = None,
+    ) -> None:
         self.refuse = refuse or set()
         self.stop = stop
+        self.copy_error = copy_error
         self.sent: list[str] = []
+        self.copies: list[tuple] = []
 
     def configured(self) -> bool:
         return True
 
-    def send(self, *, recipient: str, subject: str, body: str) -> None:
+    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
         if recipient in self.refuse:
             raise MailFailure("The mail server refused this recipient.", stop=self.stop)
         self.sent.append(recipient)
+        return self.copy_error
+
+    def save_copy(self, *, recipient: str, subject: str, body: str, sent_at) -> None:
+        self.copies.append((recipient, subject, body, sent_at))
 
 
 class GateMailer:
@@ -49,10 +60,14 @@ class GateMailer:
     def configured(self) -> bool:
         return True
 
-    def send(self, *, recipient: str, subject: str, body: str) -> None:
+    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
         self.started.set()
         assert self.release.wait(5)
         self.sent.append(recipient)
+        return None
+
+    def save_copy(self, *, recipient: str, subject: str, body: str, sent_at) -> None:
+        return None
 
 
 class Clock:
@@ -298,6 +313,73 @@ async def test_interrupted_send_is_not_retried(db) -> None:
     assert row["error"] == INTERRUPTED
     assert campaign["status"] == "succeeded"
     assert runner.mailer.sent == []
+
+
+async def test_failed_sent_copy_still_counts_as_sent(db) -> None:
+    await db.candidates.insert_one(_candidate("ada", "ada@example.com", name="Ada Lovelace"))
+    mailer = FakeMailer(copy_error="Could not save the message in Sent.")
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with _http(app) as client:
+        created = await client.post("/api/campaigns", json=_payload())
+        assert created.status_code == 201
+        await _drain(app, created.json()["id"])
+        finished = await client.get(f"/api/campaigns/{created.json()['id']}")
+    assert finished.json()["counts"]["sent"] == 1
+    row = await db.campaign_recipients.find_one({"login": "ada"})
+    assert row["status"] == "sent"
+    assert row["copy_error"] == "Could not save the message in Sent."
+    assert row.get("copied_at") is None
+    ada = await db.candidates.find_one({"login": "ada"})
+    assert ada["outreach_status"] == "message_sent"
+    assert mailer.sent == ["ada@example.com"]
+
+
+async def test_startup_files_an_existing_sent_message_once(db) -> None:
+    sent_at = datetime(2026, 2, 1, tzinfo=UTC)
+    now = datetime(2026, 2, 2, tzinfo=UTC)
+    await db.campaigns.insert_one(
+        {
+            "_id": "camp-sent",
+            "subject": "Hello {{ first_name }}",
+            "body": "Hi {{ login }}",
+            "status": "succeeded",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    await db.campaign_recipients.insert_one(
+        {
+            "_id": "row-sent",
+            "campaign_id": "camp-sent",
+            "position": 0,
+            "login": "ada",
+            "name": "Ada Lovelace",
+            "to_email": "ada@example.com",
+            "status": "sent",
+            "error": None,
+            "sent_at": sent_at,
+            "copied_at": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    mailer = FakeMailer()
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with app.router.lifespan_context(app):
+        assert mailer.sent == []
+        assert len(mailer.copies) == 1
+        recipient, subject, body, copied_sent_at = mailer.copies[0]
+        assert recipient == "ada@example.com"
+        assert subject == "Hello Ada"
+        assert body == "Hi ada"
+        assert copied_sent_at is not None
+        stored = await db.campaign_recipients.find_one({"_id": "row-sent"})
+        assert stored["copied_at"] is not None
+        assert stored["copy_error"] is None
+    mailer.copies.clear()
+    async with app.router.lifespan_context(app):
+        assert mailer.sent == []
+        assert mailer.copies == []
 
 
 async def _drain_runner(runner: CampaignRunner, campaign_id: str) -> None:

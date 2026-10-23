@@ -114,7 +114,7 @@ export type Campaign = {
 };
 
 export type MailCheckResult =
-  | { ok: true; from: string; host: string; port: number }
+  | { ok: true; from: string; host: string; port: number; sent_folder: string }
   | { ok: false; detail: string };
 
 export type CampaignDraft = {

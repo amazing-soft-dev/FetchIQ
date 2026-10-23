@@ -326,23 +326,23 @@ export function ContactsBrowser() {
           replace({ q: searchRef.current?.value.trim() || null }, true);
         }}
       >
-        <ChipMultiSelect
-          label="Location"
-          helper="Select one or more countries or locations"
-          placeholder="Search and add locations..."
-          options={locationOptions}
-          value={locationValue}
-          onChange={(next) =>
-            replace(
-              {
-                country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
-              },
-              true,
-            )
-          }
-          countNoun="location"
-        />
         <div className="filter-grid">
+          <ChipMultiSelect
+            label="Location"
+            helper="Select one or more countries or locations"
+            placeholder="Search and add locations..."
+            options={locationOptions}
+            value={locationValue}
+            onChange={(next) =>
+              replace(
+                {
+                  country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
+                },
+                true,
+              )
+            }
+            countNoun="location"
+          />
           <label>
             Search
             <input
@@ -418,6 +418,54 @@ export function ContactsBrowser() {
           >
             LinkedIn, no email
           </button>
+          <details
+            className="status-editor"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+              }
+            }}
+          >
+            <summary>Edit statuses</summary>
+            <ul className="status-list">
+              {statuses.map((status) => (
+                <li key={status.id}>
+                  <input
+                    type="text"
+                    defaultValue={status.label}
+                    aria-label={`Rename ${status.label}`}
+                    onBlur={(event) => void renameStatus(status.id, event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void removeStatus(status)}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="preset-row">
+              <label>
+                New status
+                <input
+                  type="text"
+                  value={newStatus}
+                  maxLength={40}
+                  onChange={(event) => setNewStatus(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={busy || !newStatus.trim()}
+                onClick={() => void addStatus()}
+              >
+                Add status
+              </button>
+            </div>
+          </details>
         </div>
       </form>
       <div className="bulk-bar">
@@ -480,6 +528,19 @@ export function ContactsBrowser() {
             </button>
           </>
         ) : null}
+        <label className="page-size">
+          Per page
+          <select
+            value={String(query.page_size || 25)}
+            onChange={(event) => replace({ page_size: event.target.value }, true)}
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <MessageComposer
         open={composing}
@@ -602,57 +663,7 @@ export function ContactsBrowser() {
         >
           Next
         </button>
-        <label>
-          Per page
-          <select
-            value={String(query.page_size || 25)}
-            onChange={(event) => replace({ page_size: event.target.value }, true)}
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
-      <details className="status-editor">
-        <summary>Edit statuses</summary>
-        <ul className="status-list">
-          {statuses.map((status) => (
-            <li key={status.id}>
-              <input
-                type="text"
-                defaultValue={status.label}
-                aria-label={`Rename ${status.label}`}
-                onBlur={(event) => void renameStatus(status.id, event.target.value)}
-              />
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => void removeStatus(status)}
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="preset-row">
-          <label>
-            New status
-            <input
-              type="text"
-              value={newStatus}
-              maxLength={40}
-              onChange={(event) => setNewStatus(event.target.value)}
-            />
-          </label>
-          <button type="button" disabled={busy || !newStatus.trim()} onClick={() => void addStatus()}>
-            Add status
-          </button>
-        </div>
-      </details>
     </section>
   );
 }
