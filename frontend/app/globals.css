@@ -444,9 +444,42 @@ button:disabled {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
-  align-items: end;
+  align-items: start;
+}
+
+.filter-grid > .chip-select {
+  grid-column: span 2;
+  min-width: 0;
+  gap: 0.3rem;
+}
+
+.filter-grid > .chip-select .chip-select-label {
+  font-size: 0.95rem;
+  font-weight: inherit;
+}
+
+.filter-grid > .chip-select .chip-select-helper {
+  display: none;
+}
+
+.filter-grid > .chip-select .chip-box {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.filter-grid > .chip-select .chip-box:focus-within {
+  border: 0;
+  box-shadow: none;
+}
+
+.filter-grid > .chip-select .chip-input {
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
 }
 
 .filter-grid input,
@@ -561,9 +594,21 @@ button:disabled {
 }
 
 .bulk-bar label,
-.pager label,
 .status-list input[type="text"] {
   min-width: 10rem;
+}
+
+.bulk-bar > .page-size {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.bulk-bar > .page-size select {
+  width: auto;
+  min-width: 5rem;
 }
 
 .contacts select {
@@ -585,7 +630,22 @@ button:disabled {
   align-items: center;
 }
 
-.status-editor {
+.pager {
+  justify-content: flex-end;
+}
+
+.filter-actions .status-editor {
+  border: 0;
+  padding: 0;
+}
+
+.filter-actions .status-editor summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.filter-actions .status-editor[open] {
+  flex: 1 1 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 0.8rem;
@@ -644,6 +704,10 @@ button:disabled {
   }
 
   .filter-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filter-grid > .chip-select {
+    grid-column: auto;
   }
 }
