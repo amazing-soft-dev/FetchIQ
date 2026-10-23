@@ -185,3 +185,67 @@ async def test_custom_status_rename_and_delete(db) -> None:
             labels = await client.get("/api/outreach-statuses")
             assert "message_sent" not in {item["id"] for item in labels.json()["statuses"]}
             assert "call_booked" in {item["id"] for item in labels.json()["statuses"]}
+
+
+@pytest.mark.asyncio
+async def test_contacts_filter_by_country(db) -> None:
+    await db.candidates.insert_many(
+        [
+            _candidate(
+                "ada",
+                github_user_id=7,
+                country="Germany",
+                public_email="ada@gmail.com",
+            ),
+            _candidate(
+                "grace",
+                github_user_id=8,
+                country="France",
+                public_email="grace@example.com",
+            ),
+            _candidate("linus", github_user_id=9, country=None),
+        ]
+    )
+    await db.contact_evidence.insert_many(
+        [
+            {
+                "github_user_id": 7,
+                "kind": "email",
+                "normalized_value": "ada@gmail.com",
+                "validation_status": "valid",
+            },
+            {
+                "github_user_id": 8,
+                "kind": "email",
+                "normalized_value": "grace@example.com",
+                "validation_status": "valid",
+            },
+        ]
+    )
+    app, transport = await _client(db)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            names = await client.get("/api/contacts/countries")
+            assert names.status_code == 200
+            assert names.json()["countries"] == ["France", "Germany"]
+
+            germany = await client.get("/api/contacts", params=[("country", "Germany")])
+            assert [item["login"] for item in germany.json()["contacts"]] == ["ada"]
+
+            both = await client.get(
+                "/api/contacts",
+                params=[("country", "France"), ("country", "Germany")],
+            )
+            assert {item["login"] for item in both.json()["contacts"]} == {"ada", "grace"}
+
+            unset = await client.get("/api/contacts", params=[("country", "none")])
+            assert [item["login"] for item in unset.json()["contacts"]] == ["linus"]
+
+            germany_with_email = await client.get(
+                "/api/contacts",
+                params={"country": "Germany", "email": "has"},
+            )
+            assert [item["login"] for item in germany_with_email.json()["contacts"]] == ["ada"]
+
+            logins = await client.get("/api/contacts/logins", params=[("country", "France")])
+            assert logins.json()["logins"] == ["grace"]

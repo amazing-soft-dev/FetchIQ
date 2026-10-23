@@ -73,6 +73,7 @@ export type ContactQuery = {
   email_kind?: "any" | "personal" | "other";
   linkedin?: "any" | "has" | "missing";
   status?: string[];
+  country?: string[];
   q?: string;
   job_id?: string;
 };

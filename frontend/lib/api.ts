@@ -104,6 +104,9 @@ function contactParams(query: ContactQuery, includePage: boolean): URLSearchPara
   for (const status of query.status ?? []) {
     params.append("status", status);
   }
+  for (const country of query.country ?? []) {
+    params.append("country", country);
+  }
   if (query.q) {
     params.set("q", query.q);
   }
@@ -123,6 +126,12 @@ export function listContactLogins(query: ContactQuery): Promise<string[]> {
   const params = contactParams(query, false);
   const suffix = params.size ? `?${params.toString()}` : "";
   return request<{ logins: string[] }>(`/api/contacts/logins${suffix}`).then((body) => body.logins);
+}
+
+export function listContactCountries(): Promise<string[]> {
+  return request<{ countries: string[] }>("/api/contacts/countries").then(
+    (body) => body.countries,
+  );
 }
 
 export function listOutreachStatuses(): Promise<OutreachStatus[]> {

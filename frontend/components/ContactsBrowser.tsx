@@ -8,6 +8,7 @@ import {
   createOutreachStatus,
   deleteOutreachStatus,
   downloadContacts,
+  listContactCountries,
   listContactLogins,
   listContacts,
   listJobs,
@@ -32,6 +33,7 @@ function readQuery(params: URLSearchParams): ContactQuery {
     email_kind: emailKind === "personal" || emailKind === "other" ? emailKind : "any",
     linkedin: linkedin === "has" || linkedin === "missing" ? linkedin : "any",
     status: params.getAll("status"),
+    country: params.getAll("country"),
     q: params.get("q") || "",
     job_id: params.get("job_id") || "",
   };
@@ -49,6 +51,7 @@ export function ContactsBrowser() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [total, setTotal] = useState(0);
   const [statuses, setStatuses] = useState<OutreachStatus[]>([]);
+  const [countries, setCountries] = useState<string[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkChoice, setBulkChoice] = useState("");
@@ -79,6 +82,17 @@ export function ContactsBrowser() {
         }
       })
       .catch(() => undefined);
+    listContactCountries()
+      .then((next) => {
+        if (!cancelled) {
+          setCountries(next);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(reason instanceof Error ? reason.message : "Could not load locations.");
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -135,6 +149,10 @@ export function ContactsBrowser() {
   const someVisible = visible.some((login) => selected.has(login));
   const pages = Math.max(1, Math.ceil(total / (query.page_size || 25)));
   const labels = new Map(statuses.map((status) => [status.id, status.label]));
+  const selectedCountries = (query.country ?? []).filter((country) => country && country !== "none");
+  const locationChoices = [...new Set([...countries, ...selectedCountries])].sort((left, right) =>
+    left.localeCompare(right),
+  );
 
   function togglePage() {
     setSelected((current) => {
@@ -283,6 +301,16 @@ export function ContactsBrowser() {
     replace({ status: [...current] }, true);
   }
 
+  function toggleCountryFilter(country: string) {
+    const current = new Set(query.country ?? []);
+    if (current.has(country)) {
+      current.delete(country);
+    } else {
+      current.add(country);
+    }
+    replace({ country: [...current] }, true);
+  }
+
   return (
     <section className="panel contacts">
       <div className="panel-head">
@@ -365,6 +393,29 @@ export function ContactsBrowser() {
           </button>
         </div>
       </form>
+      <fieldset>
+        <legend>Location</legend>
+        <div className="choice-list">
+          <label>
+            <input
+              type="checkbox"
+              checked={(query.country ?? []).includes("none")}
+              onChange={() => toggleCountryFilter("none")}
+            />
+            Not set
+          </label>
+          {locationChoices.map((country) => (
+            <label key={country}>
+              <input
+                type="checkbox"
+                checked={(query.country ?? []).includes(country)}
+                onChange={() => toggleCountryFilter(country)}
+              />
+              {country}
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <fieldset>
         <legend>Status</legend>
         <div className="choice-list">
