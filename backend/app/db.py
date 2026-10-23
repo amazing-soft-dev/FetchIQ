@@ -44,6 +44,18 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         [("job_id", 1), ("created_at", 1)],
         name="job_events_time",
     )
+    await db.campaigns.create_index(
+        [("status", 1), ("created_at", -1)],
+        name="campaign_status_created",
+    )
+    await db.campaign_recipients.create_index(
+        [("campaign_id", 1), ("status", 1), ("position", 1)],
+        name="recipient_campaign_status",
+    )
+    await db.campaign_recipients.create_index(
+        [("campaign_id", 1), ("sent_at", 1)],
+        name="recipient_campaign_sent",
+    )
 
 
 async def ensure_outreach_statuses(db: AsyncIOMotorDatabase) -> None:

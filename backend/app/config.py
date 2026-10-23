@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     github_token: str = ""
     database_name: str = "fetchiq"
     github_api_base: str = "https://api.github.com"
+    smtp_host: str = "smtp.hostinger.com"
+    smtp_port: int = 465
+    smtp_ssl: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
 
     @field_validator("database_name")
     @classmethod

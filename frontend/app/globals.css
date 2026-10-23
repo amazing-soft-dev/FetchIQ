@@ -117,7 +117,8 @@ label {
 
 input[type="search"],
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   background: #fff;
@@ -447,6 +448,49 @@ button:disabled {
 
 .contact-filters > .chip-select {
   flex: 1 1 100%;
+}
+
+.message-panel {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.9rem;
+}
+
+.message-panel textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+
+.message-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.message-limits label {
+  min-width: 10rem;
+  flex: 1;
+}
+
+.message-preview {
+  display: grid;
+  gap: 0.35rem;
+  border-radius: 10px;
+  background: var(--paper);
+  padding: 0.7rem 0.8rem;
+  white-space: pre-wrap;
+}
+
+.message-preview p,
+.message-failures {
+  margin: 0;
+}
+
+.message-failures {
+  padding-left: 1.1rem;
+  color: var(--danger);
 }
 
 .contact-filters label,

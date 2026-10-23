@@ -1,4 +1,6 @@
 import type {
+  Campaign,
+  CampaignDraft,
   ContactPage,
   ContactQuery,
   GeoCatalog,
@@ -172,6 +174,30 @@ export function bulkUpdateStatus(logins: string[], status: string | null): Promi
     method: "POST",
     body: JSON.stringify({ logins, status }),
   }).then((body) => body.updated);
+}
+
+export function createCampaign(draft: CampaignDraft): Promise<Campaign> {
+  return request<Campaign>("/api/campaigns", {
+    method: "POST",
+    body: JSON.stringify(draft),
+  });
+}
+
+export function getCampaign(campaignId: string): Promise<Campaign> {
+  return request<Campaign>(`/api/campaigns/${campaignId}`);
+}
+
+export function getActiveCampaign(): Promise<Campaign | null> {
+  return request<{ campaign: Campaign | null }>("/api/campaigns/active").then(
+    (body) => body.campaign,
+  );
+}
+
+export function postCampaignAction(
+  campaignId: string,
+  action: "pause" | "resume" | "cancel",
+): Promise<Campaign> {
+  return request<Campaign>(`/api/campaigns/${campaignId}/${action}`, { method: "POST" });
 }
 
 export function listJobs(): Promise<JobSummary[]> {

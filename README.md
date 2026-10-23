@@ -15,13 +15,13 @@ These sources are never used to fill an email:
 - `noreply` placeholders
 - addresses assembled from a name and a domain
 
-One `GITHUB_TOKEN` is read from the environment. Rate limits are honored with `Retry-After` and exponential backoff. FetchIQ does not rotate tokens, send email, or export a list for resale.
+One `GITHUB_TOKEN` is read from the environment. Rate limits are honored with `Retry-After` and exponential backoff. FetchIQ does not rotate tokens or export a list for resale.
 
 ## Stack
 
 - FastAPI and Motor, database name `fetchiq`
 - Next.js search UI and CSV download
-- Collections: `search_presets`, `search_jobs`, `candidates`, `contact_evidence`, `job_events`
+- Collections: `search_presets`, `search_jobs`, `candidates`, `contact_evidence`, `job_events`, `campaigns`, `campaign_recipients`
 
 `AIMS_local` and `AthensDB` are never opened.
 
@@ -78,6 +78,14 @@ Search criteria:
 When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
 
 `GET /api/jobs/{id}/export.csv` streams UTF-8 CSV. One row is emitted per GitHub user id. `include_no_contact=false` omits rows with no public contact. Cells that start with `=`, `+`, `-`, or `@` are prefixed so a spreadsheet does not treat them as formulas.
+
+## Messages
+
+The contacts page sends a plain-text message to the selected people who have a public email. That address is the recipient. The subject and body may contain `{{ first_name }}`, `{{ name }}`, `{{ login }}`, and `{{ email }}`. `first_name` is the first word of the display name, or the username when the name is missing. Any other placeholder is rejected.
+
+`POST /api/campaigns` stores the campaign and returns. A background worker sends one message at a time, waits a random delay between the campaign's minimum and maximum, and waits when the hourly limit is reached. Pause and cancel use the same control as a search job. A contact is marked Message sent after the mail server accepts the message. A second campaign cannot start while one is queued, running, or paused.
+
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SSL`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM`. The default host is `smtp.hostinger.com` on port 465. Leaving the username, password, or from address blank keeps sending disabled.
 
 ## Tests
 

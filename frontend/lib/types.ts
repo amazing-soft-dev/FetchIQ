@@ -91,6 +91,37 @@ export type JobSummary = {
   created_at: string | null;
 };
 
+export type CampaignStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
+
+export type Campaign = {
+  id: string;
+  status: CampaignStatus;
+  subject: string;
+  body: string;
+  hourly_limit: number;
+  delay_min_seconds: number;
+  delay_max_seconds: number;
+  counts: {
+    queued: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+  };
+  failures: Array<{ login: string; error: string | null }>;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type CampaignDraft = {
+  logins: string[];
+  subject: string;
+  body: string;
+  hourly_limit: number;
+  delay_min_seconds: number;
+  delay_max_seconds: number;
+};
+
 export type GeoCatalog = {
   countries: string[];
   us_states: string[];

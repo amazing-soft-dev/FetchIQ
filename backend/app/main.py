@@ -4,9 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.campaigns import CampaignRunner
 from app.config import Settings
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
+from app.mail import Mailer, SmtpMailer
+from app.routes.campaigns import router as campaigns_router
 from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
 from app.routes.presets import router as presets_router
@@ -18,6 +21,8 @@ def create_app(
     db=None,
     github: GitHubClient | None = None,
     runner: JobRunner | None = None,
+    mailer: Mailer | None = None,
+    campaigns: CampaignRunner | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
 
@@ -45,6 +50,9 @@ def create_app(
             owns_github = True
         app.state.runner = runner or JobRunner(app.state.db, app.state.github)
         await app.state.runner.resume_running()
+        app.state.mailer = mailer or SmtpMailer(settings)
+        app.state.campaigns = campaigns or CampaignRunner(app.state.db, app.state.mailer)
+        await app.state.campaigns.resume_running()
         yield
         if owns_github:
             await app.state.github.aclose()
@@ -62,6 +70,7 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(contacts_router)
     app.include_router(presets_router)
+    app.include_router(campaigns_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
