@@ -17,8 +17,10 @@ import {
   updateContactStatus,
 } from "../lib/api";
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
+import { ChipMultiSelect } from "./ChipMultiSelect";
 
 const PAGE_SIZES = [25, 50, 100] as const;
+const NOT_SET_LABEL = "Not set";
 
 function readQuery(params: URLSearchParams): ContactQuery {
   const page = Number(params.get("page") || "1");
@@ -149,9 +151,15 @@ export function ContactsBrowser() {
   const someVisible = visible.some((login) => selected.has(login));
   const pages = Math.max(1, Math.ceil(total / (query.page_size || 25)));
   const labels = new Map(statuses.map((status) => [status.id, status.label]));
-  const selectedCountries = (query.country ?? []).filter((country) => country && country !== "none");
-  const locationChoices = [...new Set([...countries, ...selectedCountries])].sort((left, right) =>
-    left.localeCompare(right),
+  const selectedCountries = (query.country ?? []).filter(Boolean);
+  const locationOptions = [
+    NOT_SET_LABEL,
+    ...[...new Set(countries.concat(selectedCountries.filter((country) => country !== "none")))].sort(
+      (left, right) => left.localeCompare(right),
+    ),
+  ];
+  const locationValue = selectedCountries.map((country) =>
+    country === "none" ? NOT_SET_LABEL : country,
   );
 
   function togglePage() {
@@ -301,16 +309,6 @@ export function ContactsBrowser() {
     replace({ status: [...current] }, true);
   }
 
-  function toggleCountryFilter(country: string) {
-    const current = new Set(query.country ?? []);
-    if (current.has(country)) {
-      current.delete(country);
-    } else {
-      current.add(country);
-    }
-    replace({ country: [...current] }, true);
-  }
-
   return (
     <section className="panel contacts">
       <div className="panel-head">
@@ -325,6 +323,22 @@ export function ContactsBrowser() {
           replace({ q: searchRef.current?.value.trim() || null }, true);
         }}
       >
+        <ChipMultiSelect
+          label="Location"
+          helper="Select one or more countries or locations"
+          placeholder="Search and add locations..."
+          options={locationOptions}
+          value={locationValue}
+          onChange={(next) =>
+            replace(
+              {
+                country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
+              },
+              true,
+            )
+          }
+          countNoun="location"
+        />
         <label>
           Search
           <input
@@ -393,29 +407,6 @@ export function ContactsBrowser() {
           </button>
         </div>
       </form>
-      <fieldset>
-        <legend>Location</legend>
-        <div className="choice-list">
-          <label>
-            <input
-              type="checkbox"
-              checked={(query.country ?? []).includes("none")}
-              onChange={() => toggleCountryFilter("none")}
-            />
-            Not set
-          </label>
-          {locationChoices.map((country) => (
-            <label key={country}>
-              <input
-                type="checkbox"
-                checked={(query.country ?? []).includes(country)}
-                onChange={() => toggleCountryFilter(country)}
-              />
-              {country}
-            </label>
-          ))}
-        </div>
-      </fieldset>
       <fieldset>
         <legend>Status</legend>
         <div className="choice-list">
