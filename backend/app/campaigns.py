@@ -10,7 +10,14 @@ from pymongo import ReturnDocument
 
 from app.contacts import contact_facts
 from app.db import utcnow
-from app.mail import Mailer, MailFailure, UnknownPlaceholder, placeholder_values, render_template
+from app.mail import (
+    CopyFailure,
+    Mailer,
+    MailFailure,
+    UnknownPlaceholder,
+    placeholder_values,
+    render_template,
+)
 
 ACTIVE = frozenset({"queued", "running", "paused"})
 WAIT_STEP_SECONDS = 5.0
@@ -209,7 +216,7 @@ class CampaignRunner:
             values = placeholder_values(name=name, login=login, email=email)
             subject = render_template(str(campaign.get("subject") or ""), values)
             body = render_template(str(campaign.get("body") or ""), values)
-            await asyncio.to_thread(
+            copy_error = await asyncio.to_thread(
                 self.mailer.send,
                 recipient=email,
                 subject=subject,
@@ -225,7 +232,15 @@ class CampaignRunner:
             await self._mark(recipient["_id"], "failed", str(exc)[:300])
             await self._finish(campaign_id, "failed", str(exc)[:300])
             return True
-        await self._mark(recipient["_id"], "sent", None, sent_at=self.clock())
+        sent_at = self.clock()
+        await self._mark(
+            recipient["_id"],
+            "sent",
+            None,
+            sent_at=sent_at,
+            copy_error=copy_error,
+            copied_at=None if copy_error else sent_at,
+        )
         await self.db.candidates.update_one(
             {"login": login},
             {"$set": {"outreach_status": "message_sent", "updated_at": self.clock()}},
@@ -238,11 +253,61 @@ class CampaignRunner:
         status: str,
         error: str | None,
         sent_at: datetime | None = None,
+        copy_error: str | None = None,
+        copied_at: datetime | None = None,
     ) -> None:
         fields: dict = {"status": status, "error": error, "updated_at": self.clock()}
         if sent_at is not None:
             fields["sent_at"] = sent_at
+        if status == "sent":
+            fields["copy_error"] = copy_error
+            if copied_at is not None:
+                fields["copied_at"] = copied_at
         await self.db.campaign_recipients.update_one({"_id": recipient_id}, {"$set": fields})
+
+    async def copy_sent(self) -> None:
+        """File Sent copies for accepted messages that do not have one yet."""
+
+        cursor = self.db.campaign_recipients.find({"status": "sent", "copied_at": None})
+        async for recipient in cursor:
+            try:
+                await self._copy_one(recipient)
+            except (CopyFailure, UnknownPlaceholder, OSError, RuntimeError, TimeoutError) as exc:
+                await self.db.campaign_recipients.update_one(
+                    {"_id": recipient["_id"]},
+                    {"$set": {"copy_error": str(exc)[:300], "updated_at": self.clock()}},
+                )
+
+    async def _copy_one(self, recipient: dict) -> None:
+        campaign = await self.db.campaigns.find_one({"_id": recipient.get("campaign_id")})
+        if campaign is None:
+            raise RuntimeError("The message campaign was not found.")
+        email = str(recipient.get("to_email") or "")
+        if not email:
+            raise RuntimeError("No public email.")
+        login = str(recipient.get("login") or "")
+        name = recipient.get("name") if isinstance(recipient.get("name"), str) else None
+        values = placeholder_values(name=name, login=login, email=email)
+        subject = render_template(str(campaign.get("subject") or ""), values)
+        body = render_template(str(campaign.get("body") or ""), values)
+        sent_at = _aware(recipient.get("sent_at"))
+        await asyncio.to_thread(
+            self.mailer.save_copy,
+            recipient=email,
+            subject=subject,
+            body=body,
+            sent_at=sent_at,
+        )
+        await self.db.campaign_recipients.update_one(
+            {"_id": recipient["_id"]},
+            {
+                "$set": {
+                    "copied_at": self.clock(),
+                    "copy_error": None,
+                    "updated_at": self.clock(),
+                }
+            },
+        )
 
     async def _finish(self, campaign_id: str, status: str, error: str | None) -> None:
         await self.db.campaigns.update_one(

@@ -17,7 +17,7 @@ const ACTIVE = new Set(["queued", "running", "paused"]);
 type MailConnection =
   | { state: "unchecked" }
   | { state: "checking" }
-  | { state: "connected"; from: string; host: string; port: number }
+  | { state: "connected"; from: string; host: string; port: number; sentFolder: string }
   | { state: "failed"; detail: string };
 
 type Props = {
@@ -127,6 +127,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
           from: result.from,
           host: result.host,
           port: result.port,
+          sentFolder: result.sent_folder,
         });
         return;
       }
@@ -198,7 +199,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
               {mailConnection.state === "unchecked" ? "Not checked" : null}
               {mailConnection.state === "checking" ? "Checking mailbox..." : null}
               {mailConnection.state === "connected"
-                ? `Connected: ${mailConnection.from} via ${mailConnection.host}:${mailConnection.port}`
+                ? `Connected: ${mailConnection.from} via ${mailConnection.host}:${mailConnection.port}. Copies go to ${mailConnection.sentFolder}.`
                 : null}
               {mailConnection.state === "failed" ? mailConnection.detail : null}
             </p>

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    imap_host: str = "imap.hostinger.com"
+    imap_port: int = 993
+    imap_ssl: bool = True
 
     @field_validator("database_name")
     @classmethod
