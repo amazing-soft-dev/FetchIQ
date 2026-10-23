@@ -11,6 +11,9 @@ import {
   type PointerEvent,
 } from "react";
 
+import { cn } from "../lib/utils";
+import { controlClass } from "./ui/input";
+
 type ChipMultiSelectProps = {
   label: string;
   helper?: string;
@@ -189,7 +192,7 @@ export function ChipMultiSelect({
 
   return (
     <div
-      className="chip-select"
+      className="flex min-w-0 flex-col gap-1"
       ref={rootRef}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -197,26 +200,29 @@ export function ChipMultiSelect({
         }
       }}
     >
-      <label className="chip-select-label" htmlFor={inputId}>
+      <label className="text-[13px] font-medium text-muted" htmlFor={inputId}>
         {label}
       </label>
 
       {helper ? (
-        <p className="chip-select-helper" id={helperId}>
+        <p className="text-xs text-subtle" id={helperId}>
           {helper}
         </p>
       ) : null}
 
-      <div className="chip-anchor">
-        <div className="chip-box" onPointerDown={onBoxPointerDown}>
+      <div className="relative min-w-0">
+        <div className="flex flex-col gap-1" onPointerDown={onBoxPointerDown}>
           {value.length > 0 ? (
-            <div className="chip-row">
+            <div className="flex flex-wrap gap-1">
               {value.map((item) => (
-                <span className="chip" key={item}>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-header px-2 py-0.5 text-xs text-ink"
+                  key={item}
+                >
                   {item}
                   <button
                     type="button"
-                    className="chip-remove"
+                    className="text-muted hover:text-ink"
                     aria-label={`Remove ${item}`}
                     onClick={() => remove(item)}
                   >
@@ -230,7 +236,7 @@ export function ChipMultiSelect({
           <input
             id={inputId}
             ref={inputRef}
-            className="chip-input"
+            className={controlClass}
             type="text"
             role="combobox"
             aria-expanded={open}
@@ -256,13 +262,13 @@ export function ChipMultiSelect({
 
         {open ? (
           <ul
-            className="chip-suggest"
+            className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-control border border-line bg-white p-1 shadow-panel"
             id={listId}
             role="listbox"
             aria-label={`${label} suggestions`}
           >
             {suggestions.length === 0 ? (
-              <li className="chip-suggest-empty">No matches</li>
+              <li className="px-2 py-1.5 text-sm text-subtle">No matches</li>
             ) : (
               suggestions.map((option, index) => (
                 <li
@@ -271,7 +277,10 @@ export function ChipMultiSelect({
                   ref={index === active ? activeOptionRef : undefined}
                   role="option"
                   aria-selected={index === active}
-                  className={index === active ? "is-active" : undefined}
+                  className={cn(
+                    "cursor-pointer rounded-md px-2 py-1.5 text-sm text-ink",
+                    index === active && "bg-hover",
+                  )}
                   onMouseEnter={() => setActiveIndex(index)}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => add(option)}
@@ -284,9 +293,9 @@ export function ChipMultiSelect({
         ) : null}
       </div>
 
-      <div className="chip-meta">
+      <div className="flex items-center justify-between text-xs text-muted">
         <span id={countId}>{selectedLabel(value.length, countNoun)}</span>
-        <button type="button" className="chip-clear" onClick={clearAll}>
+        <button type="button" className="text-accent hover:underline" onClick={clearAll}>
           Clear all
         </button>
       </div>

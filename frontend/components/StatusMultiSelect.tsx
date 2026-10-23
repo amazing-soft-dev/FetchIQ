@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
+
+import { cn } from "../lib/utils";
+import { Checkbox } from "./ui/checkbox";
+import { controlClass } from "./ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 type StatusOption = {
   id: string;
@@ -25,65 +30,45 @@ function summary(value: string[], labels: Map<string, string>): string {
 
 export function StatusMultiSelect({ options, value, onToggle }: StatusMultiSelectProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
   const listId = useId();
   const labels = new Map(options.map((option) => [option.id, option.label]));
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
   return (
-    <div className="menu-select" ref={rootRef}>
-      <span id={labelId}>Status</span>
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listId}
-        aria-labelledby={labelId}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {summary(value, labels)}
-      </button>
-      {open ? (
-        <ul id={listId} className="menu-select-list" role="listbox" aria-multiselectable="true">
-          {options.map((option) => {
-            const checked = value.includes(option.id);
-            return (
-              <li key={option.id} role="option" aria-selected={checked}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => onToggle(option.id)}
-                  />
-                  {option.label}
-                </label>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+    <div className="flex min-w-0 flex-col gap-1">
+      <span id={labelId} className="text-[13px] font-medium text-muted">
+        Status
+      </span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          type="button"
+          className={cn(controlClass, "justify-between text-left")}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-labelledby={labelId}
+        >
+          {summary(value, labels)}
+        </PopoverTrigger>
+        <PopoverContent className="w-56">
+          <ul id={listId} role="listbox" aria-multiselectable="true" aria-labelledby={labelId}>
+            {options.map((option) => {
+              const checked = value.includes(option.id);
+              return (
+                <li key={option.id} role="option" aria-selected={checked}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink hover:bg-hover">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => onToggle(option.id)}
+                    />
+                    {option.label}
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
