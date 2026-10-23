@@ -437,17 +437,79 @@ button:disabled {
   gap: 0.5rem;
 }
 
-.contact-filters,
-.bulk-bar,
-.pager {
-  display: flex;
-  flex-wrap: wrap;
+.contact-filters {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.75rem;
   align-items: end;
 }
 
-.contact-filters > .chip-select {
-  flex: 1 1 100%;
+.filter-grid input,
+.filter-grid select,
+.menu-select > button {
+  height: 2.625rem;
+}
+
+.menu-select {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  font-size: 0.95rem;
+}
+
+.menu-select > button {
+  width: 100%;
+  justify-content: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 400;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  box-shadow: none;
+}
+
+.menu-select > button:hover,
+.menu-select > button:focus-visible {
+  background: #fff;
+  border-color: var(--accent);
+}
+
+.menu-select-list {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 100%;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(20, 33, 28, 0.12);
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.menu-select-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.35rem 0.4rem;
+  border-radius: 8px;
+}
+
+.menu-select-list label:hover {
+  background: var(--accent-soft);
 }
 
 .message-panel {
@@ -493,7 +555,11 @@ button:disabled {
   color: var(--danger);
 }
 
-.contact-filters label,
+.filter-grid label,
+.menu-select {
+  min-width: 0;
+}
+
 .bulk-bar label,
 .pager label,
 .status-list input[type="text"] {
@@ -575,5 +641,9 @@ button:disabled {
   .site-header {
     flex-direction: column;
     gap: 0.2rem;
+  }
+
+  .filter-grid {
+    grid-template-columns: 1fr;
   }
 }
