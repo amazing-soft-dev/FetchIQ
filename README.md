@@ -87,6 +87,8 @@ The contacts page sends a plain-text message to the selected people who have a p
 
 Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SSL`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM`. The default host is `smtp.hostinger.com` on port 465. Leaving the username, password, or from address blank keeps sending disabled.
 
+`POST /api/mail/check` logs in and reports whether that mailbox is connected. It does not send a message. The contacts page keeps Send disabled until that check succeeds.
+
 ## Tests
 
 Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.

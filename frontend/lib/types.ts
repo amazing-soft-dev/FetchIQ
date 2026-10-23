@@ -113,6 +113,10 @@ export type Campaign = {
   updated_at: string | null;
 };
 
+export type MailCheckResult =
+  | { ok: true; from: string; host: string; port: number }
+  | { ok: false; detail: string };
+
 export type CampaignDraft = {
   logins: string[];
   subject: string;

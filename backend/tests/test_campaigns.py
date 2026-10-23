@@ -154,7 +154,15 @@ async def test_authentication_failure_stops_before_the_next_recipient(db) -> Non
 
 async def test_unknown_placeholder_and_missing_mail_are_rejected(db) -> None:
     await db.candidates.insert_one(_candidate("ada", "ada@example.com"))
-    plain = create_app(settings=Settings(database_name="fetchiq_test"), db=db)
+    plain = create_app(
+        settings=Settings(
+            database_name="fetchiq_test",
+            smtp_username="",
+            smtp_password="",
+            smtp_from="",
+        ),
+        db=db,
+    )
     async with _http(plain) as client:
         missing = await client.post("/api/campaigns", json=_payload())
     assert missing.status_code == 422
