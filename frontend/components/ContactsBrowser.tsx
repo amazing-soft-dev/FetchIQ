@@ -1,5 +1,6 @@
 "use client";
 
+import { Download } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -17,9 +18,16 @@ import {
   updateContactStatus,
 } from "../lib/api";
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
+import { cn } from "../lib/utils";
 import { ChipMultiSelect } from "./ChipMultiSelect";
 import { MessageComposer } from "./MessageComposer";
 import { StatusMultiSelect } from "./StatusMultiSelect";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import { ChoiceSelect } from "./ui/choice-select";
+import { Field } from "./ui/field";
+import { Input } from "./ui/input";
 
 const PAGE_SIZES = [25, 50, 100] as const;
 const NOT_SET_LABEL = "Not set";
@@ -312,80 +320,97 @@ export function ContactsBrowser() {
     replace({ status: [...current] }, true);
   }
 
+  function downloadSelected() {
+    setBusy(true);
+    setError(null);
+    downloadContacts([...selected])
+      .catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "Could not download the CSV.");
+      })
+      .finally(() => setBusy(false));
+  }
+
   return (
-    <section className="panel contacts">
-      <div className="panel-head">
-        <p className="eyebrow">Stored GitHub profiles</p>
-        <h1>Contacts</h1>
+    <section className="rounded-panel border border-line bg-white p-4 shadow-panel">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold tracking-tight">Contacts</h1>
+          <Badge>{total} matching</Badge>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy || selected.size === 0}
+          onClick={downloadSelected}
+        >
+          <Download className="size-4" />
+          Download
+        </Button>
       </div>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="mb-3 text-sm text-danger">{error}</p> : null}
       <form
-        className="contact-filters"
         onSubmit={(event) => {
           event.preventDefault();
           replace({ q: searchRef.current?.value.trim() || null }, true);
         }}
       >
-        <div className="filter-grid">
-          <ChipMultiSelect
-            label="Location"
-            helper="Select one or more countries or locations"
-            placeholder="Search and add locations..."
-            options={locationOptions}
-            value={locationValue}
-            onChange={(next) =>
-              replace(
-                {
-                  country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
-                },
-                true,
-              )
-            }
-            countNoun="location"
-          />
-          <label>
-            Search
-            <input
+        <div className="grid grid-cols-2 items-start gap-3 min-[721px]:grid-cols-4">
+          <div className="col-span-1 min-[721px]:col-span-2">
+            <ChipMultiSelect
+              label="Location"
+              placeholder="Search and add locations..."
+              options={locationOptions}
+              value={locationValue}
+              onChange={(next) =>
+                replace(
+                  {
+                    country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
+                  },
+                  true,
+                )
+              }
+              countNoun="location"
+            />
+          </div>
+          <Field label="Search">
+            <Input
               ref={searchRef}
               key={query.q || ""}
               type="search"
               defaultValue={query.q || ""}
               placeholder="Username, name, or email"
             />
-          </label>
-          <label>
-            Public email
-            <select
-              value={query.email}
-              onChange={(event) => replace({ email: event.target.value }, true)}
-            >
-              <option value="any">Any</option>
-              <option value="has">Has one</option>
-              <option value="missing">Has none</option>
-            </select>
-          </label>
-          <label>
-            Email kind
-            <select
-              value={query.email_kind}
-              onChange={(event) => replace({ email_kind: event.target.value }, true)}
-            >
-              <option value="any">Any</option>
-              <option value="personal">Personal</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
-          <label>
-            LinkedIn
-            <select
-              value={query.linkedin}
-              onChange={(event) => replace({ linkedin: event.target.value }, true)}
-            >
-              <option value="any">Any</option>
-              <option value="has">Has one</option>
-              <option value="missing">Has none</option>
-            </select>
-          </label>
+          </Field>
+          <ChoiceSelect
+            label="Public email"
+            value={query.email || "any"}
+            onValueChange={(value) => replace({ email: value }, true)}
+            options={[
+              { value: "any", label: "Any" },
+              { value: "has", label: "Has one" },
+              { value: "missing", label: "Has none" },
+            ]}
+          />
+          <ChoiceSelect
+            label="Email kind"
+            value={query.email_kind || "any"}
+            onValueChange={(value) => replace({ email_kind: value }, true)}
+            options={[
+              { value: "any", label: "Any" },
+              { value: "personal", label: "Personal" },
+              { value: "other", label: "Other" },
+            ]}
+          />
+          <ChoiceSelect
+            label="LinkedIn"
+            value={query.linkedin || "any"}
+            onValueChange={(value) => replace({ linkedin: value }, true)}
+            options={[
+              { value: "any", label: "Any" },
+              { value: "has", label: "Has one" },
+              { value: "missing", label: "Has none" },
+            ]}
+          />
           <StatusMultiSelect
             options={[
               { id: "none", label: "Not set" },
@@ -394,152 +419,120 @@ export function ContactsBrowser() {
             value={query.status ?? []}
             onToggle={toggleStatusFilter}
           />
-          <label>
-            Search job
-            <select
-              value={query.job_id || ""}
-              onChange={(event) => replace({ job_id: event.target.value || null }, true)}
-            >
-              <option value="">Any search</option>
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · {job.status}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ChoiceSelect
+            label="Search job"
+            value={query.job_id || "any"}
+            onValueChange={(value) => replace({ job_id: value === "any" ? null : value }, true)}
+            options={[
+              { value: "any", label: "Any search" },
+              ...jobs.map((job) => ({
+                value: job.id,
+                label: `${job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · ${job.status}`,
+              })),
+            ]}
+          />
         </div>
-        <div className="filter-actions">
-          <button type="submit">Search</button>
-          <button
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button type="submit">Search</Button>
+          <Button
             type="button"
-            className="secondary"
+            variant="secondary"
             onClick={() => replace({ email: "missing", linkedin: "has" }, true)}
           >
             LinkedIn, no email
-          </button>
+          </Button>
           <details
-            className="status-editor"
+            className="[&:not([open])>:not(summary)]:hidden open:basis-full open:rounded-control open:border open:border-line open:bg-header open:p-3"
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
               }
             }}
           >
-            <summary>Edit statuses</summary>
-            <ul className="status-list">
+            <summary className="cursor-pointer text-sm font-medium text-ink">Edit statuses</summary>
+            <ul className="mt-3 flex flex-col gap-2">
               {statuses.map((status) => (
-                <li key={status.id}>
-                  <input
+                <li key={status.id} className="flex items-center gap-2">
+                  <Input
                     type="text"
                     defaultValue={status.label}
                     aria-label={`Rename ${status.label}`}
                     onBlur={(event) => void renameStatus(status.id, event.target.value)}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="secondary"
+                    variant="secondary"
                     disabled={busy}
                     onClick={() => void removeStatus(status)}
                   >
                     Delete
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
-            <div className="preset-row">
-              <label>
-                New status
-                <input
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <Field label="New status" className="min-w-40 flex-1">
+                <Input
                   type="text"
                   value={newStatus}
                   maxLength={40}
                   onChange={(event) => setNewStatus(event.target.value)}
                 />
-              </label>
-              <button
-                type="button"
-                disabled={busy || !newStatus.trim()}
-                onClick={() => void addStatus()}
-              >
+              </Field>
+              <Button type="button" disabled={busy || !newStatus.trim()} onClick={() => void addStatus()}>
                 Add status
-              </button>
+              </Button>
             </div>
           </details>
         </div>
       </form>
-      <div className="bulk-bar">
-        <p className="muted">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <p className="text-sm text-muted">
           {total} matching
           {selected.size > 0 ? ` · ${selected.size} selected` : ""}
         </p>
         {selected.size > 0 ? (
           <>
-            <label>
-              Bulk status
-              <select value={bulkChoice} onChange={(event) => setBulkChoice(event.target.value)}>
-                <option value="">Choose a status</option>
-                <option value="none">Not set</option>
-                {statuses.map((status) => (
-                  <option key={status.id} value={status.id}>
-                    {status.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={busy || bulkChoice === ""}
-              onClick={() => void applyBulk()}
-            >
+            <div className="min-w-40">
+              <ChoiceSelect
+                ariaLabel="Bulk status"
+                value={bulkChoice || "choose"}
+                onValueChange={(value) => setBulkChoice(value === "choose" ? "" : value)}
+                options={[
+                  { value: "choose", label: "Choose a status" },
+                  { value: "none", label: "Not set" },
+                  ...statuses.map((status) => ({ value: status.id, label: status.label })),
+                ]}
+              />
+            </div>
+            <Button type="button" disabled={busy || bulkChoice === ""} onClick={() => void applyBulk()}>
               Set status
-            </button>
-            <button type="button" disabled={busy} onClick={() => setComposing(true)}>
+            </Button>
+            <Button type="button" disabled={busy} onClick={() => setComposing(true)}>
               Message
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                setError(null);
-                downloadContacts([...selected])
-                  .catch((reason: unknown) => {
-                    setError(
-                      reason instanceof Error ? reason.message : "Could not download the CSV.",
-                    );
-                  })
-                  .finally(() => setBusy(false));
-              }}
-            >
-              Download
-            </button>
-            <button
-              type="button"
-              className="secondary"
+              variant="secondary"
               disabled={busy || total === 0}
               onClick={() => void selectMatching()}
             >
               Select all matching
-            </button>
-            <button type="button" className="secondary" onClick={() => setSelected(new Set())}>
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setSelected(new Set())}>
               Clear
-            </button>
+            </Button>
           </>
         ) : null}
-        <label className="page-size">
+        <label className="ml-auto flex items-center gap-2 text-[13px] font-medium text-muted">
           Per page
-          <select
+          <ChoiceSelect
+            ariaLabel="Per page"
             value={String(query.page_size || 25)}
-            onChange={(event) => replace({ page_size: event.target.value }, true)}
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => replace({ page_size: value }, true)}
+            triggerClassName="w-20"
+            options={PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
+          />
         </label>
       </div>
       <MessageComposer
@@ -556,113 +549,118 @@ export function ContactsBrowser() {
             .catch(() => undefined);
         }}
       />
-      <div className="table-scroll">
-        <table className="contacts-table">
-          <thead>
-            <tr>
-              <th>
-                <input
-                  type="checkbox"
-                  checked={allVisible}
-                  ref={(node) => {
-                    if (node) {
-                      node.indeterminate = !allVisible && someVisible;
-                    }
-                  }}
-                  onChange={togglePage}
+      <div className="mt-2 overflow-auto rounded-panel border border-line">
+        <table className="w-full min-w-[960px] border-collapse text-sm">
+          <thead className="sticky top-0 z-10 bg-header text-left text-xs font-medium text-muted">
+            <tr className="border-b border-line">
+              <th className="w-10 px-3 py-2">
+                <Checkbox
+                  checked={allVisible ? true : someVisible ? "indeterminate" : false}
+                  onCheckedChange={() => togglePage()}
                   aria-label="Select all contacts on this page"
                 />
               </th>
-              <th>Username</th>
-              <th>Name</th>
-              <th>Public email</th>
-              <th>Kind</th>
-              <th>LinkedIn</th>
-              <th>Country</th>
-              <th>Status</th>
-              <th>Last checked</th>
+              <th className="px-3 py-2 font-medium">Username</th>
+              <th className="px-3 py-2 font-medium">Name</th>
+              <th className="px-3 py-2 font-medium">Public email</th>
+              <th className="px-3 py-2 font-medium">Kind</th>
+              <th className="px-3 py-2 font-medium">LinkedIn</th>
+              <th className="px-3 py-2 font-medium">Country</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 font-medium">Last checked</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9}>Loading contacts…</td>
+                <td className="px-3 py-6 text-muted" colSpan={9}>
+                  Loading contacts…
+                </td>
               </tr>
             ) : contacts.length === 0 ? (
               <tr>
-                <td colSpan={9}>No contacts match these filters.</td>
+                <td className="px-3 py-6 text-muted" colSpan={9}>
+                  No contacts match these filters.
+                </td>
               </tr>
             ) : (
-              contacts.map((contact) => (
-                <tr key={contact.login}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(contact.login)}
-                      onChange={() => toggleOne(contact.login)}
-                      aria-label={`Select ${contact.login}`}
-                    />
-                  </td>
-                  <td>
-                    <a href={contact.profile_url || `https://github.com/${contact.login}`}>
-                      {contact.login}
-                    </a>
-                  </td>
-                  <td>{contact.name || "—"}</td>
-                  <td>{contact.public_email || "—"}</td>
-                  <td>{contact.email_kinds.map(kindLabel).join(", ") || "—"}</td>
-                  <td>
-                    {contact.linkedin_url ? (
-                      <a href={contact.linkedin_url}>Profile</a>
-                    ) : (
-                      "—"
+              contacts.map((contact, index) => {
+                const rowStatus = contact.outreach_status ?? "none";
+                const statusOptions = [
+                  { value: "none", label: "Not set" },
+                  ...(contact.outreach_status && !labels.has(contact.outreach_status)
+                    ? [{ value: contact.outreach_status, label: contact.outreach_status }]
+                    : []),
+                  ...statuses.map((status) => ({ value: status.id, label: status.label })),
+                ];
+                return (
+                  <tr
+                    key={contact.login}
+                    className={cn(
+                      "border-b border-line last:border-0 hover:bg-hover",
+                      index % 2 === 1 && "bg-stripe",
+                      selected.has(contact.login) &&
+                        "bg-[color-mix(in_srgb,#5b5bd6_7%,white)]",
                     )}
-                  </td>
-                  <td>{contact.country || "—"}</td>
-                  <td>
-                    <select
-                      aria-label={`Status for ${contact.login}`}
-                      value={contact.outreach_status ?? "none"}
-                      onChange={(event) => void changeRow(contact.login, event.target.value)}
-                    >
-                      <option value="none">Not set</option>
-                      {contact.outreach_status && !labels.has(contact.outreach_status) ? (
-                        <option value={contact.outreach_status}>{contact.outreach_status}</option>
-                      ) : null}
-                      {statuses.map((status) => (
-                        <option key={status.id} value={status.id}>
-                          {status.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>{contact.last_checked_at ? contact.last_checked_at.slice(0, 16) : "—"}</td>
-                </tr>
-              ))
+                  >
+                    <td className="px-3 py-2">
+                      <Checkbox
+                        checked={selected.has(contact.login)}
+                        onCheckedChange={() => toggleOne(contact.login)}
+                        aria-label={`Select ${contact.login}`}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <a href={contact.profile_url || `https://github.com/${contact.login}`}>
+                        {contact.login}
+                      </a>
+                    </td>
+                    <td className="px-3 py-2">{contact.name || "—"}</td>
+                    <td className="px-3 py-2">{contact.public_email || "—"}</td>
+                    <td className="px-3 py-2">{contact.email_kinds.map(kindLabel).join(", ") || "—"}</td>
+                    <td className="px-3 py-2">
+                      {contact.linkedin_url ? <a href={contact.linkedin_url}>Profile</a> : "—"}
+                    </td>
+                    <td className="px-3 py-2">{contact.country || "—"}</td>
+                    <td className="px-3 py-2">
+                      <ChoiceSelect
+                        ariaLabel={`Status for ${contact.login}`}
+                        value={rowStatus}
+                        onValueChange={(value) => void changeRow(contact.login, value)}
+                        triggerClassName="min-w-32"
+                        options={statusOptions}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-muted">
+                      {contact.last_checked_at ? contact.last_checked_at.slice(0, 16) : "—"}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
-      <div className="pager">
-        <button
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <Button
           type="button"
-          className="secondary"
+          variant="secondary"
           disabled={(query.page || 1) <= 1}
           onClick={() => replace({ page: String((query.page || 1) - 1) }, false)}
         >
           Previous
-        </button>
-        <p className="muted">
+        </Button>
+        <p className="text-sm text-muted">
           Page {query.page} of {pages}
         </p>
-        <button
+        <Button
           type="button"
-          className="secondary"
+          variant="secondary"
           disabled={(query.page || 1) >= pages}
           onClick={() => replace({ page: String((query.page || 1) + 1) }, false)}
         >
           Next
-        </button>
+        </Button>
       </div>
     </section>
   );
