@@ -19,6 +19,7 @@ import {
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
 import { ChipMultiSelect } from "./ChipMultiSelect";
 import { MessageComposer } from "./MessageComposer";
+import { StatusMultiSelect } from "./StatusMultiSelect";
 
 const PAGE_SIZES = [25, 50, 100] as const;
 const NOT_SET_LABEL = "Not set";
@@ -341,63 +342,73 @@ export function ContactsBrowser() {
           }
           countNoun="location"
         />
-        <label>
-          Search
-          <input
-            ref={searchRef}
-            key={query.q || ""}
-            type="search"
-            defaultValue={query.q || ""}
-            placeholder="Username, name, or email"
+        <div className="filter-grid">
+          <label>
+            Search
+            <input
+              ref={searchRef}
+              key={query.q || ""}
+              type="search"
+              defaultValue={query.q || ""}
+              placeholder="Username, name, or email"
+            />
+          </label>
+          <label>
+            Public email
+            <select
+              value={query.email}
+              onChange={(event) => replace({ email: event.target.value }, true)}
+            >
+              <option value="any">Any</option>
+              <option value="has">Has one</option>
+              <option value="missing">Has none</option>
+            </select>
+          </label>
+          <label>
+            Email kind
+            <select
+              value={query.email_kind}
+              onChange={(event) => replace({ email_kind: event.target.value }, true)}
+            >
+              <option value="any">Any</option>
+              <option value="personal">Personal</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            LinkedIn
+            <select
+              value={query.linkedin}
+              onChange={(event) => replace({ linkedin: event.target.value }, true)}
+            >
+              <option value="any">Any</option>
+              <option value="has">Has one</option>
+              <option value="missing">Has none</option>
+            </select>
+          </label>
+          <StatusMultiSelect
+            options={[
+              { id: "none", label: "Not set" },
+              ...statuses.map((status) => ({ id: status.id, label: status.label })),
+            ]}
+            value={query.status ?? []}
+            onToggle={toggleStatusFilter}
           />
-        </label>
-        <label>
-          Public email
-          <select
-            value={query.email}
-            onChange={(event) => replace({ email: event.target.value }, true)}
-          >
-            <option value="any">Any</option>
-            <option value="has">Has one</option>
-            <option value="missing">Has none</option>
-          </select>
-        </label>
-        <label>
-          Email kind
-          <select
-            value={query.email_kind}
-            onChange={(event) => replace({ email_kind: event.target.value }, true)}
-          >
-            <option value="any">Any</option>
-            <option value="personal">Personal</option>
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <label>
-          LinkedIn
-          <select
-            value={query.linkedin}
-            onChange={(event) => replace({ linkedin: event.target.value }, true)}
-          >
-            <option value="any">Any</option>
-            <option value="has">Has one</option>
-            <option value="missing">Has none</option>
-          </select>
-        </label>
-        <label>
-          Search job
-          <select
-            value={query.job_id || ""}
-            onChange={(event) => replace({ job_id: event.target.value || null }, true)}
-          >
-            <option value="">Any search</option>
-            {jobs.map((job) => (
-              <option key={job.id} value={job.id}>
-                {job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · {job.status}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label>
+            Search job
+            <select
+              value={query.job_id || ""}
+              onChange={(event) => replace({ job_id: event.target.value || null }, true)}
+            >
+              <option value="">Any search</option>
+              {jobs.map((job) => (
+                <option key={job.id} value={job.id}>
+                  {job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · {job.status}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="filter-actions">
           <button type="submit">Search</button>
           <button
@@ -409,125 +420,66 @@ export function ContactsBrowser() {
           </button>
         </div>
       </form>
-      <fieldset>
-        <legend>Status</legend>
-        <div className="choice-list">
-          <label>
-            <input
-              type="checkbox"
-              checked={(query.status ?? []).includes("none")}
-              onChange={() => toggleStatusFilter("none")}
-            />
-            Not set
-          </label>
-          {statuses.map((status) => (
-            <label key={status.id}>
-              <input
-                type="checkbox"
-                checked={(query.status ?? []).includes(status.id)}
-                onChange={() => toggleStatusFilter(status.id)}
-              />
-              {status.label}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <details className="status-editor">
-        <summary>Edit statuses</summary>
-        <ul className="status-list">
-          {statuses.map((status) => (
-            <li key={status.id}>
-              <input
-                type="text"
-                defaultValue={status.label}
-                aria-label={`Rename ${status.label}`}
-                onBlur={(event) => void renameStatus(status.id, event.target.value)}
-              />
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => void removeStatus(status)}
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="preset-row">
-          <label>
-            New status
-            <input
-              type="text"
-              value={newStatus}
-              maxLength={40}
-              onChange={(event) => setNewStatus(event.target.value)}
-            />
-          </label>
-          <button type="button" disabled={busy || !newStatus.trim()} onClick={() => void addStatus()}>
-            Add status
-          </button>
-        </div>
-      </details>
       <div className="bulk-bar">
         <p className="muted">
-          {selected.size} selected
-          {total > 0 ? ` · ${total} matching` : ""}
+          {total} matching
+          {selected.size > 0 ? ` · ${selected.size} selected` : ""}
         </p>
-        <label>
-          Bulk status
-          <select value={bulkChoice} onChange={(event) => setBulkChoice(event.target.value)}>
-            <option value="">Choose a status</option>
-            <option value="none">Not set</option>
-            {statuses.map((status) => (
-              <option key={status.id} value={status.id}>
-                {status.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={busy || selected.size === 0 || bulkChoice === ""}
-          onClick={() => void applyBulk()}
-        >
-          Set status for {selected.size} contacts
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || total === 0}
-          onClick={() => void selectMatching()}
-        >
-          Select all {total} matching
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={selected.size === 0}
-          onClick={() => setSelected(new Set())}
-        >
-          Clear selection
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || selected.size === 0}
-          onClick={() => {
-            setBusy(true);
-            setError(null);
-            downloadContacts([...selected])
-              .catch((reason: unknown) => {
-                setError(reason instanceof Error ? reason.message : "Could not download the CSV.");
-              })
-              .finally(() => setBusy(false));
-          }}
-        >
-          Download selected CSV
-        </button>
-        <button type="button" disabled={selected.size === 0} onClick={() => setComposing(true)}>
-          Message
-        </button>
+        {selected.size > 0 ? (
+          <>
+            <label>
+              Bulk status
+              <select value={bulkChoice} onChange={(event) => setBulkChoice(event.target.value)}>
+                <option value="">Choose a status</option>
+                <option value="none">Not set</option>
+                {statuses.map((status) => (
+                  <option key={status.id} value={status.id}>
+                    {status.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={busy || bulkChoice === ""}
+              onClick={() => void applyBulk()}
+            >
+              Set status
+            </button>
+            <button type="button" disabled={busy} onClick={() => setComposing(true)}>
+              Message
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError(null);
+                downloadContacts([...selected])
+                  .catch((reason: unknown) => {
+                    setError(
+                      reason instanceof Error ? reason.message : "Could not download the CSV.",
+                    );
+                  })
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Download
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || total === 0}
+              onClick={() => void selectMatching()}
+            >
+              Select all matching
+            </button>
+            <button type="button" className="secondary" onClick={() => setSelected(new Set())}>
+              Clear
+            </button>
+          </>
+        ) : null}
       </div>
       <MessageComposer
         open={composing}
@@ -664,6 +616,43 @@ export function ContactsBrowser() {
           </select>
         </label>
       </div>
+      <details className="status-editor">
+        <summary>Edit statuses</summary>
+        <ul className="status-list">
+          {statuses.map((status) => (
+            <li key={status.id}>
+              <input
+                type="text"
+                defaultValue={status.label}
+                aria-label={`Rename ${status.label}`}
+                onBlur={(event) => void renameStatus(status.id, event.target.value)}
+              />
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={() => void removeStatus(status)}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="preset-row">
+          <label>
+            New status
+            <input
+              type="text"
+              value={newStatus}
+              maxLength={40}
+              onChange={(event) => setNewStatus(event.target.value)}
+            />
+          </label>
+          <button type="button" disabled={busy || !newStatus.trim()} onClick={() => void addStatus()}>
+            Add status
+          </button>
+        </div>
+      </details>
     </section>
   );
 }
