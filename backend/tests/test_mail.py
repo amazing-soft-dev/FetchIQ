@@ -1,15 +1,18 @@
 import smtplib
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
 from app.mail import (
     MailFailure,
+    check_mailbox,
     placeholder_values,
     render_template,
     send_message,
     unknown_placeholders,
 )
+from app.main import create_app
 
 
 def test_placeholders_use_the_first_word_and_fall_back_to_the_login() -> None:
@@ -89,3 +92,78 @@ def test_authentication_failure_stops_the_campaign() -> None:
             connect=connect,
         )
     assert caught.value.stop is True
+
+
+def _unconfigured() -> Settings:
+    return Settings(
+        database_name="fetchiq_test",
+        smtp_username="",
+        smtp_password="",
+        smtp_from="",
+    )
+
+
+def test_blank_mailbox_is_not_connected() -> None:
+    def connect(settings):
+        raise AssertionError("should not connect")
+
+    result = check_mailbox(_unconfigured(), connect=connect)
+    assert result == {"ok": False, "detail": "Mail is not configured."}
+
+
+def test_login_reports_the_mailbox_without_sending() -> None:
+    client = _Client()
+
+    def connect(settings):
+        return client
+
+    result = check_mailbox(_settings(), connect=connect)
+    assert result == {
+        "ok": True,
+        "from": "Ada <ada@example.com>",
+        "host": "smtp.hostinger.com",
+        "port": 465,
+    }
+    assert client.messages == []
+    assert "password" not in result
+
+
+def test_refused_login_is_not_connected() -> None:
+    client = _Client()
+
+    def login(username: str, password: str) -> None:
+        raise smtplib.SMTPAuthenticationError(535, b"no")
+
+    client.login = login
+
+    def connect(settings):
+        return client
+
+    result = check_mailbox(_settings(), connect=connect)
+    assert result == {"ok": False, "detail": "The mail server refused the mailbox login."}
+    assert client.messages == []
+
+
+def test_connection_failure_is_not_connected() -> None:
+    class Closed:
+        def __enter__(self):
+            raise TimeoutError("timed out")
+
+        def __exit__(self, *args):
+            return False
+
+    def connect(settings):
+        return Closed()
+
+    result = check_mailbox(_settings(), connect=connect)
+    assert result == {"ok": False, "detail": "Could not connect to the mail server."}
+
+
+async def test_mail_check_endpoint_reports_missing_configuration(db) -> None:
+    app = create_app(settings=_unconfigured(), db=db)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/mail/check")
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "detail": "Mail is not configured."}

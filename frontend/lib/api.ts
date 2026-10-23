@@ -1,6 +1,7 @@
 import type {
   Campaign,
   CampaignDraft,
+  MailCheckResult,
   ContactPage,
   ContactQuery,
   GeoCatalog,
@@ -174,6 +175,10 @@ export function bulkUpdateStatus(logins: string[], status: string | null): Promi
     method: "POST",
     body: JSON.stringify({ logins, status }),
   }).then((body) => body.updated);
+}
+
+export function checkMailbox(): Promise<MailCheckResult> {
+  return request<MailCheckResult>("/api/mail/check", { method: "POST" });
 }
 
 export function createCampaign(draft: CampaignDraft): Promise<Campaign> {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  checkMailbox,
   createCampaign,
   getActiveCampaign,
   getCampaign,
@@ -12,6 +13,12 @@ import { renderMessage, unknownPlaceholders } from "../lib/message";
 import type { Campaign, Contact } from "../lib/types";
 
 const ACTIVE = new Set(["queued", "running", "paused"]);
+
+type MailConnection =
+  | { state: "unchecked" }
+  | { state: "checking" }
+  | { state: "connected"; from: string; host: string; port: number }
+  | { state: "failed"; detail: string };
 
 type Props = {
   open: boolean;
@@ -30,6 +37,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mailConnection, setMailConnection] = useState<MailConnection>({ state: "unchecked" });
   const delivered = useRef(0);
   const notify = useRef(onDelivered);
 
@@ -108,6 +116,29 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     };
   }, [campaignId, campaignStatus]);
 
+  async function checkConnection() {
+    setMailConnection({ state: "checking" });
+    setError(null);
+    try {
+      const result = await checkMailbox();
+      if (result.ok) {
+        setMailConnection({
+          state: "connected",
+          from: result.from,
+          host: result.host,
+          port: result.port,
+        });
+        return;
+      }
+      setMailConnection({ state: "failed", detail: result.detail });
+    } catch (reason: unknown) {
+      setMailConnection({
+        state: "failed",
+        detail: reason instanceof Error ? reason.message : "Could not check the mailbox.",
+      });
+    }
+  }
+
   async function send() {
     setBusy(true);
     setError(null);
@@ -154,6 +185,24 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
       {error ? <p className="error">{error}</p> : null}
       {open && !active ? (
         <>
+          <div className="filter-actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={mailConnection.state === "checking"}
+              onClick={() => void checkConnection()}
+            >
+              Check connection
+            </button>
+            <p className={mailConnection.state === "failed" ? "error" : "muted"}>
+              {mailConnection.state === "unchecked" ? "Not checked" : null}
+              {mailConnection.state === "checking" ? "Checking mailbox..." : null}
+              {mailConnection.state === "connected"
+                ? `Connected: ${mailConnection.from} via ${mailConnection.host}:${mailConnection.port}`
+                : null}
+              {mailConnection.state === "failed" ? mailConnection.detail : null}
+            </p>
+          </div>
           <label>
             Subject
             <input
@@ -235,6 +284,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
               type="button"
               disabled={
                 busy ||
+                mailConnection.state !== "connected" ||
                 selected.length === 0 ||
                 !subject.trim() ||
                 !body.trim() ||
