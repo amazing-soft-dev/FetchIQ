@@ -1,5 +1,7 @@
 """Campaign routes. Creating a campaign returns before any SMTP connection."""
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -48,6 +50,11 @@ class CampaignCreate(BaseModel):
         if self.delay_min_seconds > self.delay_max_seconds:
             raise ValueError("minimum delay cannot exceed the maximum")
         return self
+
+
+@router.post("/mail/check")
+async def check_mail(request: Request) -> dict:
+    return await asyncio.to_thread(request.app.state.mailer.check)
 
 
 async def _load(db, campaign_id: str) -> dict:

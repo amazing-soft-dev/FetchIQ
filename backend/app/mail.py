@@ -30,6 +30,9 @@ class Mailer(Protocol):
     def configured(self) -> bool:
         """True when a mailbox can accept messages."""
 
+    def check(self) -> dict:
+        """Log in without sending a message."""
+
     def send(self, *, recipient: str, subject: str, body: str) -> None:
         """Deliver one plain-text message."""
 
@@ -84,26 +87,12 @@ def _connect(settings: Settings):
     return client
 
 
-def send_message(
-    settings: Settings,
-    *,
-    recipient: str,
-    subject: str,
-    body: str,
-    connect=None,
-) -> None:
-    """Send one message. Authentication and connection errors stop the campaign."""
-
+def _with_mailbox(settings: Settings, connect, action) -> None:
     opener = connect or _connect
-    message = EmailMessage()
-    message["From"] = settings.smtp_from
-    message["To"] = recipient
-    message["Subject"] = subject
-    message.set_content(body)
     try:
         with opener(settings) as client:
             client.login(settings.smtp_username, settings.smtp_password)
-            client.send_message(message)
+            action(client)
     except smtplib.SMTPAuthenticationError as exc:
         raise MailFailure("The mail server refused the mailbox login.", stop=True) from exc
     except smtplib.SMTPRecipientsRefused as exc:
@@ -123,12 +112,50 @@ def send_message(
         raise MailFailure("Could not connect to the mail server.", stop=True) from exc
 
 
+def send_message(
+    settings: Settings,
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    connect=None,
+) -> None:
+    """Send one message. Authentication and connection errors stop the campaign."""
+
+    message = EmailMessage()
+    message["From"] = settings.smtp_from
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    _with_mailbox(settings, connect, lambda client: client.send_message(message))
+
+
+def check_mailbox(settings: Settings, *, connect=None) -> dict:
+    """Log in and report the mailbox. No message is sent."""
+
+    if not mail_configured(settings):
+        return {"ok": False, "detail": "Mail is not configured."}
+    try:
+        _with_mailbox(settings, connect, lambda client: None)
+    except MailFailure as exc:
+        return {"ok": False, "detail": str(exc)}
+    return {
+        "ok": True,
+        "from": settings.smtp_from.strip(),
+        "host": settings.smtp_host,
+        "port": settings.smtp_port,
+    }
+
+
 class SmtpMailer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def configured(self) -> bool:
         return mail_configured(self.settings)
+
+    def check(self) -> dict:
+        return check_mailbox(self.settings)
 
     def send(self, *, recipient: str, subject: str, body: str) -> None:
         send_message(self.settings, recipient=recipient, subject=subject, body=body)
