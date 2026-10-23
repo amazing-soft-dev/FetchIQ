@@ -10,7 +10,12 @@ import {
   postCampaignAction,
 } from "../lib/api";
 import { renderMessage, unknownPlaceholders } from "../lib/message";
+import { messageDraftError } from "../lib/schemas";
 import type { Campaign, Contact } from "../lib/types";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import { Field } from "./ui/field";
+import { Input, Textarea } from "./ui/input";
 
 const ACTIVE = new Set(["queued", "running", "paused"]);
 
@@ -54,6 +59,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     const contact = contacts.find((item) => item.login === login);
     return contact !== undefined && !contact.public_email;
   }).length;
+  const draftProblem = messageDraftError({ subject, body, hourlyLimit, delayMin, delayMax });
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +147,19 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
   }
 
   async function send() {
+    const problem = messageDraftError({ subject, body, hourlyLimit, delayMin, delayMax });
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    if (unknown.length > 0) {
+      setError(`Unknown placeholder: ${unknown.map((name) => `{{ ${name} }}`).join(", ")}`);
+      return;
+    }
+    if (mailConnection.state !== "connected") {
+      setError("Check the mailbox before sending.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -177,172 +196,182 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     }
   }
 
+  const progress = campaign ? (
+    <div className="rounded-control border border-line bg-header p-3">
+      <p className="text-sm font-medium capitalize">{campaign.status}</p>
+      <p className="mt-1 text-sm text-muted">
+        {campaign.counts.sent} sent · {campaign.counts.failed} failed · {campaign.counts.queued}{" "}
+        queued · {campaign.counts.skipped} skipped
+      </p>
+      {campaign.error ? <p className="mt-2 text-sm text-danger">{campaign.error}</p> : null}
+      {campaign.failures.length > 0 ? (
+        <ul className="mt-2 list-disc pl-5 text-sm text-danger">
+          {campaign.failures.map((failure) => (
+            <li key={failure.login}>
+              {failure.login}: {failure.error || "Failed"}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {campaign.status === "running" || campaign.status === "queued" ? (
+          <Button type="button" variant="secondary" disabled={busy} onClick={() => void act("pause")}>
+            Pause
+          </Button>
+        ) : null}
+        {campaign.status === "paused" ? (
+          <Button type="button" disabled={busy} onClick={() => void act("resume")}>
+            Resume
+          </Button>
+        ) : null}
+        {active ? (
+          <Button type="button" variant="secondary" disabled={busy} onClick={() => void act("cancel")}>
+            Cancel
+          </Button>
+        ) : (
+          <Button type="button" variant="secondary" onClick={() => setCampaign(null)}>
+            Dismiss
+          </Button>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   if (!open && !campaign) {
     return null;
   }
 
   return (
-    <section className="message-panel">
-      {error ? <p className="error">{error}</p> : null}
-      {open && !active ? (
-        <>
-          <div className="filter-actions">
-            <button
-              type="button"
-              className="secondary"
-              disabled={mailConnection.state === "checking"}
-              onClick={() => void checkConnection()}
-            >
-              Check connection
-            </button>
-            <p className={mailConnection.state === "failed" ? "error" : "muted"}>
-              {mailConnection.state === "unchecked" ? "Not checked" : null}
-              {mailConnection.state === "checking" ? "Checking mailbox..." : null}
-              {mailConnection.state === "connected"
-                ? `Connected: ${mailConnection.from} via ${mailConnection.host}:${mailConnection.port}. Copies go to ${mailConnection.sentFolder}.`
-                : null}
-              {mailConnection.state === "failed" ? mailConnection.detail : null}
-            </p>
-          </div>
-          <label>
-            Subject
-            <input
-              type="text"
-              value={subject}
-              maxLength={200}
-              onChange={(event) => setSubject(event.target.value)}
-            />
-          </label>
-          <label>
-            Message
-            <textarea
-              value={body}
-              maxLength={20000}
-              placeholder="Hello {{ first_name }}"
-              onChange={(event) => setBody(event.target.value)}
-            />
-          </label>
-          <div className="message-limits">
-            <label>
-              Maximum per hour
-              <input
-                type="number"
-                min={1}
-                max={500}
-                value={hourlyLimit}
-                onChange={(event) => setHourlyLimit(Number(event.target.value))}
-              />
-            </label>
-            <label>
-              Delay from (seconds)
-              <input
-                type="number"
-                min={0}
-                max={3600}
-                value={delayMin}
-                onChange={(event) => setDelayMin(Number(event.target.value))}
-              />
-            </label>
-            <label>
-              Delay to (seconds)
-              <input
-                type="number"
-                min={0}
-                max={3600}
-                value={delayMax}
-                onChange={(event) => setDelayMax(Number(event.target.value))}
-              />
-            </label>
-          </div>
-          <p className="muted">
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) {
+            onClose();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogTitle className="pr-8 text-lg font-semibold tracking-tight">Message</DialogTitle>
+          <DialogDescription className="mt-1 text-sm text-muted">
             Use {"{{ first_name }}"}, {"{{ name }}"}, {"{{ login }}"}, or {"{{ email }}"}. The
             public email is the address the message is sent to.
-          </p>
-          {unknown.length > 0 ? (
-            <p className="error">
-              Unknown placeholder: {unknown.map((name) => `{{ ${name} }}`).join(", ")}
-            </p>
-          ) : null}
-          {preview ? (
-            <div className="message-preview">
-              <p>
-                Preview for {preview.login}. To: {preview.public_email || "no public email"}
-              </p>
-              <p>{renderMessage(subject, preview) || "Subject"}</p>
-              <p>{renderMessage(body, preview) || "Message"}</p>
-            </div>
-          ) : (
-            <p className="muted">Select a contact on this page to preview the message.</p>
-          )}
-          {loadedWithoutEmail > 0 ? (
-            <p className="muted">
-              {loadedWithoutEmail} selected {loadedWithoutEmail === 1 ? "contact has" : "contacts have"}{" "}
-              no public email and will be skipped.
-            </p>
-          ) : null}
-          <div className="filter-actions">
-            <button
-              type="button"
-              disabled={
-                busy ||
-                mailConnection.state !== "connected" ||
-                selected.length === 0 ||
-                !subject.trim() ||
-                !body.trim() ||
-                unknown.length > 0 ||
-                delayMin > delayMax ||
-                hourlyLimit < 1
-              }
-              onClick={() => void send()}
-            >
-              Send
-            </button>
-            <button type="button" className="secondary" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </>
-      ) : null}
-      {campaign ? (
-        <div className="message-progress">
-          <p className={`status status-${campaign.status}`}>{campaign.status}</p>
-          <p className="muted">
-            {campaign.counts.sent} sent · {campaign.counts.failed} failed · {campaign.counts.queued}{" "}
-            queued · {campaign.counts.skipped} skipped
-          </p>
-          {campaign.error ? <p className="error">{campaign.error}</p> : null}
-          {campaign.failures.length > 0 ? (
-            <ul className="message-failures">
-              {campaign.failures.map((failure) => (
-                <li key={failure.login}>
-                  {failure.login}: {failure.error || "Failed"}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          <div className="filter-actions">
-            {campaign.status === "running" || campaign.status === "queued" ? (
-              <button type="button" className="secondary" disabled={busy} onClick={() => void act("pause")}>
-                Pause
-              </button>
+          </DialogDescription>
+          <div className="mt-4 flex flex-col gap-3">
+            {error ? <p className="text-sm text-danger">{error}</p> : null}
+            {open && !active ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={mailConnection.state === "checking"}
+                    onClick={() => void checkConnection()}
+                  >
+                    Check connection
+                  </Button>
+                  <p className={mailConnection.state === "failed" ? "text-sm text-danger" : "text-sm text-muted"}>
+                    {mailConnection.state === "unchecked" ? "Not checked" : null}
+                    {mailConnection.state === "checking" ? "Checking mailbox..." : null}
+                    {mailConnection.state === "connected"
+                      ? `Connected: ${mailConnection.from} via ${mailConnection.host}:${mailConnection.port}. Copies go to ${mailConnection.sentFolder}.`
+                      : null}
+                    {mailConnection.state === "failed" ? mailConnection.detail : null}
+                  </p>
+                </div>
+                <Field label="Subject">
+                  <Input
+                    type="text"
+                    value={subject}
+                    maxLength={200}
+                    onChange={(event) => setSubject(event.target.value)}
+                  />
+                </Field>
+                <Field label="Message">
+                  <Textarea
+                    value={body}
+                    maxLength={20000}
+                    placeholder="Hello {{ first_name }}"
+                    onChange={(event) => setBody(event.target.value)}
+                  />
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="Maximum per hour">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={hourlyLimit}
+                      onChange={(event) => setHourlyLimit(Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Delay from (seconds)">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={delayMin}
+                      onChange={(event) => setDelayMin(Number(event.target.value))}
+                    />
+                  </Field>
+                  <Field label="Delay to (seconds)">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={delayMax}
+                      onChange={(event) => setDelayMax(Number(event.target.value))}
+                    />
+                  </Field>
+                </div>
+                {unknown.length > 0 ? (
+                  <p className="text-sm text-danger">
+                    Unknown placeholder: {unknown.map((name) => `{{ ${name} }}`).join(", ")}
+                  </p>
+                ) : null}
+                {preview ? (
+                  <div className="rounded-control border border-line bg-header p-3 text-sm">
+                    <p className="text-muted">
+                      Preview for {preview.login}. To: {preview.public_email || "no public email"}
+                    </p>
+                    <p className="mt-2 font-medium">{renderMessage(subject, preview) || "Subject"}</p>
+                    <p className="mt-1 whitespace-pre-wrap">{renderMessage(body, preview) || "Message"}</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted">Select a contact on this page to preview the message.</p>
+                )}
+                {loadedWithoutEmail > 0 ? (
+                  <p className="text-sm text-muted">
+                    {loadedWithoutEmail} selected{" "}
+                    {loadedWithoutEmail === 1 ? "contact has" : "contacts have"} no public email and
+                    will be skipped.
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={
+                      busy ||
+                      mailConnection.state !== "connected" ||
+                      selected.length === 0 ||
+                      draftProblem !== null ||
+                      unknown.length > 0
+                    }
+                    onClick={() => void send()}
+                  >
+                    Send
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={onClose}>
+                    Close
+                  </Button>
+                </div>
+              </>
             ) : null}
-            {campaign.status === "paused" ? (
-              <button type="button" disabled={busy} onClick={() => void act("resume")}>
-                Resume
-              </button>
-            ) : null}
-            {active ? (
-              <button type="button" className="secondary" disabled={busy} onClick={() => void act("cancel")}>
-                Cancel
-              </button>
-            ) : (
-              <button type="button" className="secondary" onClick={() => setCampaign(null)}>
-                Dismiss
-              </button>
-            )}
+            {open ? progress : null}
           </div>
-        </div>
-      ) : null}
-    </section>
+        </DialogContent>
+      </Dialog>
+      {!open && progress ? <div className="mt-4">{progress}</div> : null}
+    </>
   );
 }

@@ -1,13 +1,27 @@
 "use client";
 
+import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { exportHref, getJob, postJobAction } from "../lib/api";
 import type { Job, JobStatus } from "../lib/types";
+import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 
 const ACTIVE: JobStatus[] = ["queued", "running", "paused"];
+
+const tone: Record<JobStatus, string> = {
+  queued: "text-muted",
+  running: "text-accent",
+  paused: "text-ink",
+  incomplete: "text-ink",
+  succeeded: "text-ink",
+  failed: "text-danger",
+  cancelled: "text-muted",
+};
 
 export function JobPanel({ jobId }: { jobId: string }) {
   const router = useRouter();
@@ -67,106 +81,115 @@ export function JobPanel({ jobId }: { jobId: string }) {
   }
 
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <p className="eyebrow">
-          <Link href="/">New search</Link>
+    <section className="rounded-panel border border-line bg-white p-5 shadow-panel">
+      <div className="mb-4">
+        <p className="text-xs font-medium tracking-wide text-muted uppercase">
+          <Link href="/" className="text-muted hover:text-ink">
+            New search
+          </Link>
         </p>
-        <h1>Job status</h1>
+        <h1 className="mt-1 text-lg font-semibold tracking-tight">Job status</h1>
       </div>
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="mb-4 text-sm text-danger">{error}</p> : null}
       {job ? (
         <>
-          <p className={`status status-${job.status}`}>
-            {job.status}
-            {ACTIVE.includes(job.status) ? <span className="pulse" aria-hidden="true" /> : null}
-          </p>
-          <dl className="counts">
-            <div>
-              <dt>Discovered</dt>
-              <dd>{job.counts.discovered}</dd>
-            </div>
-            <div>
-              <dt>Enriched</dt>
-              <dd>{job.counts.enriched}</dd>
-            </div>
-            <div>
-              <dt>Errors</dt>
-              <dd>{job.counts.errors}</dd>
-            </div>
-            <div>
-              <dt>Emails</dt>
-              <dd>{job.counts.emails}</dd>
-            </div>
-            <div>
-              <dt>LinkedIn without email</dt>
-              <dd>{job.counts.linkedin_without_email}</dd>
-            </div>
+          <AnimatePresence mode="wait">
+            <motion.p
+              key={job.status}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.2 }}
+              className={cn(
+                "inline-flex items-center gap-2 text-sm font-medium capitalize",
+                tone[job.status],
+              )}
+            >
+              {job.status}
+              {ACTIVE.includes(job.status) ? (
+                <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />
+              ) : null}
+            </motion.p>
+          </AnimatePresence>
+          <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {(
+              [
+                ["Discovered", job.counts.discovered],
+                ["Enriched", job.counts.enriched],
+                ["Errors", job.counts.errors],
+                ["Emails", job.counts.emails],
+                ["LinkedIn without email", job.counts.linkedin_without_email],
+              ] as const
+            ).map(([label, value]) => (
+              <div key={label} className="rounded-control border border-line bg-header px-3 py-2">
+                <dt className="text-xs text-muted">{label}</dt>
+                <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
+              </div>
+            ))}
           </dl>
           {job.incomplete_reasons.length > 0 ? (
-            <ul className="reasons">
+            <ul className="mt-4 list-disc pl-5 text-sm text-muted">
               {job.incomplete_reasons.map((reason) => (
                 <li key={reason}>{reason}</li>
               ))}
             </ul>
           ) : null}
-          {job.error ? <p className="error">{job.error}</p> : null}
-          <div className="actions">
+          {job.error ? <p className="mt-4 text-sm text-danger">{job.error}</p> : null}
+          <div className="mt-4 flex flex-wrap gap-2">
             {job.status === "queued" ? (
-              <button type="button" disabled={busy} onClick={() => void act("start")}>
+              <Button type="button" disabled={busy} onClick={() => void act("start")}>
                 Start
-              </button>
+              </Button>
             ) : null}
             {job.status === "running" ? (
-              <button type="button" disabled={busy} onClick={() => void act("pause")}>
+              <Button type="button" disabled={busy} onClick={() => void act("pause")}>
                 Pause
-              </button>
+              </Button>
             ) : null}
             {job.status === "paused" ||
             job.status === "incomplete" ||
             (job.status === "failed" && (job.error ?? "").startsWith("Could not resolve")) ? (
-              <button type="button" disabled={busy} onClick={() => void act("resume")}>
+              <Button type="button" disabled={busy} onClick={() => void act("resume")}>
                 Resume
-              </button>
+              </Button>
             ) : null}
             {job.status !== "succeeded" && job.status !== "failed" && job.status !== "cancelled" ? (
-              <button
+              <Button
                 type="button"
-                className="secondary"
+                variant="secondary"
                 disabled={busy}
                 onClick={() => void act("cancel")}
               >
                 Cancel
-              </button>
+              </Button>
             ) : null}
           </div>
           {job.counts.discovered > 0 ? (
             <>
-              <p className="muted">
+              <p className="mt-4 text-sm text-muted">
                 {job.counts.enriched} of {job.counts.discovered} profiles enriched. Profile name,
                 location, public email, and UTC offset are filled as each profile is enriched.
               </p>
-              <p className="muted">
+              <p className="mt-2 text-sm">
                 <Link href={`/contacts?job_id=${job.id}`}>Review these contacts</Link>
               </p>
-              <div className="export-box">
-                <label>
-                  <input
-                    type="checkbox"
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-sm text-ink">
+                  <Checkbox
                     checked={includeNoContact}
-                    onChange={(event) => setIncludeNoContact(event.target.checked)}
+                    onCheckedChange={(checked) => setIncludeNoContact(checked === true)}
                   />
                   Include rows with no public contact
                 </label>
-                <a className="button" href={exportHref(job.id, includeNoContact)}>
-                  Export CSV
-                </a>
+                <Button asChild>
+                  <a href={exportHref(job.id, includeNoContact)}>Export CSV</a>
+                </Button>
               </div>
             </>
           ) : null}
         </>
       ) : (
-        <p className="muted">Loading job…</p>
+        <p className="text-sm text-muted">Loading job…</p>
       )}
     </section>
   );

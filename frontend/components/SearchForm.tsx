@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { createJob, createPreset, getGeo, listPresets, startJob } from "../lib/api";
+import { searchCriteriaError } from "../lib/schemas";
 import {
   UNITED_STATES,
   emptyCriteria,
@@ -12,32 +13,15 @@ import {
   type SearchCriteria,
 } from "../lib/types";
 import { ChipMultiSelect } from "./ChipMultiSelect";
-
-function ageInMonths(years: number, months: number): number {
-  return years * 12 + months;
-}
-
-function criteriaError(criteria: SearchCriteria): string | null {
-  if (criteria.countries.length === 0) {
-    return "Select at least one country.";
-  }
-  const age = criteria.account_age;
-  const fields = [age.min_years, age.min_months, age.max_years, age.max_months];
-  if (fields.some((value) => !Number.isInteger(value) || value < 0)) {
-    return "Account age must be a whole number of years and months.";
-  }
-  if (age.min_months > 11 || age.max_months > 11 || age.min_years > 100 || age.max_years > 100) {
-    return "Years must be 0 to 100 and months must be 0 to 11.";
-  }
-  if (ageInMonths(age.min_years, age.min_months) > ageInMonths(age.max_years, age.max_months)) {
-    return "Minimum account age must be less than or equal to the maximum.";
-  }
-  const limit = criteria.candidate_limit;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 5000) {
-    return "Candidate limit must be between 1 and 5000.";
-  }
-  return null;
-}
+import { Button } from "./ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import { Field } from "./ui/field";
+import { Input } from "./ui/input";
 
 function parseKeywords(value: string): string[] {
   return value
@@ -147,7 +131,7 @@ export function SearchForm() {
 
   async function savePreset() {
     const next = currentCriteria();
-    const problem = criteriaError(next);
+    const problem = searchCriteriaError(next);
     if (problem) {
       setError(problem);
       return;
@@ -171,7 +155,7 @@ export function SearchForm() {
 
   async function startSearch() {
     const next = currentCriteria();
-    const problem = criteriaError(next);
+    const problem = searchCriteriaError(next);
     if (problem) {
       setError(problem);
       return;
@@ -190,24 +174,24 @@ export function SearchForm() {
 
   return (
     <form
-      className="panel"
+      className="rounded-panel border border-line bg-white p-5 shadow-panel"
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
         void startSearch();
       }}
     >
-      <div className="panel-head">
-        <h1>Search public GitHub profiles</h1>
-        <p>
+      <div className="mb-5">
+        <h1 className="text-lg font-semibold tracking-tight">Search public GitHub profiles</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted">
           Location and account age seed the search. Contact fields are filled only from what a
           developer has published on their profile or in a public README.
         </p>
       </div>
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="mb-4 text-sm text-danger">{error}</p> : null}
 
-      <div className="location-age-row">
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         <ChipMultiSelect
           key={`countries-${presetVersion}`}
           label="Location"
@@ -219,12 +203,11 @@ export function SearchForm() {
           countNoun="location"
         />
 
-        <fieldset className="account-age">
-          <legend>Account age</legend>
-          <div className="age-grid">
-            <label>
-              Minimum years
-              <input
+        <fieldset>
+          <legend className="text-[13px] font-medium text-muted">Account age</legend>
+          <div className="mt-1 grid grid-cols-2 gap-3">
+            <Field label="Minimum years">
+              <Input
                 type="number"
                 min={0}
                 max={100}
@@ -232,10 +215,9 @@ export function SearchForm() {
                 value={ageInputs.min_years}
                 onChange={(event) => setAgeInput("min_years", event.target.value)}
               />
-            </label>
-            <label>
-              Minimum months
-              <input
+            </Field>
+            <Field label="Minimum months">
+              <Input
                 type="number"
                 min={0}
                 max={11}
@@ -243,10 +225,9 @@ export function SearchForm() {
                 value={ageInputs.min_months}
                 onChange={(event) => setAgeInput("min_months", event.target.value)}
               />
-            </label>
-            <label>
-              Maximum years
-              <input
+            </Field>
+            <Field label="Maximum years">
+              <Input
                 type="number"
                 min={0}
                 max={100}
@@ -254,10 +235,9 @@ export function SearchForm() {
                 value={ageInputs.max_years}
                 onChange={(event) => setAgeInput("max_years", event.target.value)}
               />
-            </label>
-            <label>
-              Maximum months
-              <input
+            </Field>
+            <Field label="Maximum months">
+              <Input
                 type="number"
                 min={0}
                 max={11}
@@ -265,80 +245,85 @@ export function SearchForm() {
                 value={ageInputs.max_months}
                 onChange={(event) => setAgeInput("max_months", event.target.value)}
               />
-            </label>
+            </Field>
           </div>
         </fieldset>
       </div>
 
       {unitedStatesSelected ? (
-        <ChipMultiSelect
-          key={`states-${presetVersion}`}
-          label="US states"
-          placeholder="Search and add states..."
-          options={catalog?.us_states ?? []}
-          value={criteria.us_states}
-          onChange={setStates}
-          countNoun="state"
-        />
+        <div className="mt-4">
+          <ChipMultiSelect
+            key={`states-${presetVersion}`}
+            label="US states"
+            placeholder="Search and add states..."
+            options={catalog?.us_states ?? []}
+            value={criteria.us_states}
+            onChange={setStates}
+            countNoun="state"
+          />
+        </div>
       ) : null}
 
-      <label>
-        Keywords
-        <input
-          type="text"
-          value={keywordText}
-          placeholder="Optional, comma-separated"
-          onChange={(event) => setKeywordText(event.target.value)}
-        />
-      </label>
-
-      <label>
-        Candidate limit
-        <input
-          type="number"
-          min={1}
-          max={5000}
-          placeholder={String(LIMIT_DEFAULT)}
-          value={limitInput}
-          onChange={(event) => setLimitInput(event.target.value)}
-        />
-      </label>
-
-      <div className="actions">
-        <button type="submit" disabled={busy}>
-          {busy ? "Starting…" : "Start search"}
-        </button>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field label="Keywords">
+          <Input
+            type="text"
+            value={keywordText}
+            placeholder="Optional, comma-separated"
+            onChange={(event) => setKeywordText(event.target.value)}
+          />
+        </Field>
+        <Field label="Candidate limit">
+          <Input
+            type="number"
+            min={1}
+            max={5000}
+            placeholder={String(LIMIT_DEFAULT)}
+            value={limitInput}
+            onChange={(event) => setLimitInput(event.target.value)}
+          />
+        </Field>
       </div>
 
-      <fieldset>
-        <legend>Presets</legend>
-        <div className="preset-row">
-          <label>
-            Preset name
-            <input
+      <div className="mt-4">
+        <Button type="submit" disabled={busy}>
+          {busy ? "Starting…" : "Start search"}
+        </Button>
+      </div>
+
+      <fieldset className="mt-6 border-t border-line pt-4">
+        <legend className="text-sm font-medium">Presets</legend>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Field label="Preset name" className="min-w-48 flex-1">
+            <Input
               type="text"
               value={presetName}
               maxLength={80}
               onChange={(event) => setPresetName(event.target.value)}
             />
-          </label>
-          <button type="button" onClick={() => void savePreset()} disabled={busy}>
+          </Field>
+          <Button type="button" variant="secondary" onClick={() => void savePreset()} disabled={busy}>
             Save preset
-          </button>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="secondary">
+                Load preset
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              {presets.length === 0 ? (
+                <DropdownMenuItem disabled>No saved presets.</DropdownMenuItem>
+              ) : (
+                presets.map((preset) => (
+                  <DropdownMenuItem key={preset.id} onSelect={() => loadPreset(preset)}>
+                    {preset.name}
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        {presets.length === 0 ? (
-          <p className="muted">No saved presets.</p>
-        ) : (
-          <ul className="preset-list">
-            {presets.map((preset) => (
-              <li key={preset.id}>
-                <button type="button" onClick={() => loadPreset(preset)}>
-                  {preset.name}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </fieldset>
     </form>
   );
