@@ -20,6 +20,7 @@ from app.export import COLUMNS, build_row, format_csv_row
 router = APIRouter(prefix="/api")
 
 _STATUS_QUERY = Query(default=[])
+_COUNTRY_QUERY = Query(default=[])
 _EMAIL = frozenset({"any", "has", "missing"})
 _KIND = frozenset({"any", "personal", "other"})
 _LINKEDIN = frozenset({"any", "has", "missing"})
@@ -94,6 +95,7 @@ def _candidate_query(
     q: str,
     job_id: str,
     statuses: list[str],
+    countries: list[str],
 ) -> dict:
     parts: list[dict] = []
     if job_id:
@@ -122,6 +124,25 @@ def _candidate_query(
                         {"outreach_status": None},
                         {"outreach_status": ""},
                         {"outreach_status": {"$exists": False}},
+                    ]
+                }
+            )
+        if len(clauses) == 1:
+            parts.append(clauses[0])
+        elif clauses:
+            parts.append({"$or": clauses})
+    if countries:
+        clauses = []
+        names = [item for item in countries if item and item != NOT_SET]
+        if names:
+            clauses.append({"country": {"$in": names}})
+        if NOT_SET in countries:
+            clauses.append(
+                {
+                    "$or": [
+                        {"country": None},
+                        {"country": ""},
+                        {"country": {"$exists": False}},
                     ]
                 }
             )
@@ -272,12 +293,13 @@ async def list_contacts(
     email_kind: str = Query(default="any"),
     linkedin: str = Query(default="any"),
     status: list[str] = _STATUS_QUERY,
+    country: list[str] = _COUNTRY_QUERY,
     q: str = Query(default=""),
     job_id: str = Query(default=""),
 ) -> dict:
     _check_filters(email, email_kind, linkedin, page, page_size)
     db = request.app.state.db
-    query = _candidate_query(q=q, job_id=job_id, statuses=status)
+    query = _candidate_query(q=q, job_id=job_id, statuses=status, countries=country)
     skip = (page - 1) * page_size
     if _needs_evidence(email, email_kind, linkedin):
         matched = await _filtered_candidates(
@@ -313,6 +335,16 @@ async def list_contacts(
     return {"contacts": contacts, "total": total, "page": page, "page_size": page_size}
 
 
+@router.get("/contacts/countries")
+async def list_contact_countries(request: Request) -> dict:
+    values = await request.app.state.db.candidates.distinct("country")
+    names = sorted(
+        {value.strip() for value in values if isinstance(value, str) and value.strip()},
+        key=str.casefold,
+    )
+    return {"countries": names}
+
+
 @router.get("/contacts/logins")
 async def list_contact_logins(
     request: Request,
@@ -320,12 +352,13 @@ async def list_contact_logins(
     email_kind: str = Query(default="any"),
     linkedin: str = Query(default="any"),
     status: list[str] = _STATUS_QUERY,
+    country: list[str] = _COUNTRY_QUERY,
     q: str = Query(default=""),
     job_id: str = Query(default=""),
 ) -> dict:
     _check_filters(email, email_kind, linkedin, 1, 25)
     db = request.app.state.db
-    query = _candidate_query(q=q, job_id=job_id, statuses=status)
+    query = _candidate_query(q=q, job_id=job_id, statuses=status, countries=country)
     matched = await _filtered_candidates(
         db, query, email=email, email_kind=email_kind, linkedin=linkedin
     )
