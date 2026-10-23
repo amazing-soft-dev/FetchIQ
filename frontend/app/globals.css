@@ -594,9 +594,21 @@ button:disabled {
 }
 
 .bulk-bar label,
-.pager label,
 .status-list input[type="text"] {
   min-width: 10rem;
+}
+
+.bulk-bar > .page-size {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.bulk-bar > .page-size select {
+  width: auto;
+  min-width: 5rem;
 }
 
 .contacts select {
@@ -616,6 +628,10 @@ button:disabled {
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: center;
+}
+
+.pager {
+  justify-content: flex-end;
 }
 
 .filter-actions .status-editor {

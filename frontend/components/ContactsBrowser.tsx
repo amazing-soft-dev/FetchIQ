@@ -528,6 +528,19 @@ export function ContactsBrowser() {
             </button>
           </>
         ) : null}
+        <label className="page-size">
+          Per page
+          <select
+            value={String(query.page_size || 25)}
+            onChange={(event) => replace({ page_size: event.target.value }, true)}
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <MessageComposer
         open={composing}
@@ -650,19 +663,6 @@ export function ContactsBrowser() {
         >
           Next
         </button>
-        <label>
-          Per page
-          <select
-            value={String(query.page_size || 25)}
-            onChange={(event) => replace({ page_size: event.target.value }, true)}
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
     </section>
   );
