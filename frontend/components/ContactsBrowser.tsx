@@ -18,6 +18,7 @@ import {
 } from "../lib/api";
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
 import { ChipMultiSelect } from "./ChipMultiSelect";
+import { MessageComposer } from "./MessageComposer";
 
 const PAGE_SIZES = [25, 50, 100] as const;
 const NOT_SET_LABEL = "Not set";
@@ -61,6 +62,7 @@ export function ContactsBrowser() {
   const [error, setError] = useState<string | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [composing, setComposing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const loading = loadedKey !== queryKey;
 
@@ -523,7 +525,24 @@ export function ContactsBrowser() {
         >
           Download selected CSV
         </button>
+        <button type="button" disabled={selected.size === 0} onClick={() => setComposing(true)}>
+          Message
+        </button>
       </div>
+      <MessageComposer
+        open={composing}
+        selected={[...selected]}
+        contacts={contacts}
+        onClose={() => setComposing(false)}
+        onDelivered={() => {
+          listContacts(readQuery(new URLSearchParams(queryKey)))
+            .then((page) => {
+              setContacts(page.contacts);
+              setTotal(page.total);
+            })
+            .catch(() => undefined);
+        }}
+      />
       <div className="table-scroll">
         <table className="contacts-table">
           <thead>
