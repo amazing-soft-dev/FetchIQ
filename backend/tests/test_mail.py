@@ -179,19 +179,43 @@ def test_refused_login_is_not_connected() -> None:
     assert client.messages == []
 
 
-def test_connection_failure_is_not_connected() -> None:
-    class Closed:
-        def __enter__(self):
-            raise TimeoutError("timed out")
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [
+        (TimeoutError("timed out"), "timed out"),
+        (ConnectionRefusedError("no"), "connection refused"),
+        (smtplib.SMTPServerDisconnected("bye"), "the server closed the connection"),
+    ],
+)
+def test_connection_failure_reports_the_cause(error: Exception, cause: str) -> None:
+    def connect(settings):
+        raise error
 
-        def __exit__(self, *args):
-            return False
+    result = check_mailbox(_settings(), connect=connect, sleeper=lambda _seconds: None)
+    assert result == {"ok": False, "detail": f"Could not connect to the mail server. ({cause})"}
+
+
+def test_dropped_connection_is_retried() -> None:
+    calls = 0
+    waits: list[float] = []
+    client = _Client()
 
     def connect(settings):
-        return Closed()
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise TimeoutError("timed out")
+        return client
 
-    result = check_mailbox(_settings(), connect=connect)
-    assert result == {"ok": False, "detail": "Could not connect to the mail server."}
+    result = check_mailbox(
+        _settings(),
+        connect=connect,
+        imap_connect=_imap(_Imap()),
+        sleeper=waits.append,
+    )
+    assert result["ok"] is True
+    assert calls == 3
+    assert waits == [0.5, 1.0]
 
 
 async def test_mail_check_endpoint_reports_missing_configuration(db) -> None:

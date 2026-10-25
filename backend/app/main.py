@@ -54,6 +54,7 @@ def create_app(
         app.state.campaigns = campaigns or CampaignRunner(app.state.db, app.state.mailer)
         await app.state.campaigns.resume_running()
         await app.state.campaigns.copy_sent()
+        await app.state.campaigns.recover_connection_failures()
         yield
         if owns_github:
             await app.state.github.aclose()

@@ -3,6 +3,7 @@
 import imaplib
 import re
 import smtplib
+import time
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
@@ -11,7 +12,17 @@ from typing import Protocol
 from app.config import Settings
 
 ALLOWED_PLACEHOLDERS = frozenset({"first_name", "name", "login", "email"})
+CONNECTION_ERROR = "Could not connect to the mail server."
 _TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+_CONNECT_ATTEMPTS = 3
+_CONNECT_BACKOFF = (0.5, 1.0)
+_CONNECT_ERRORS = (
+    smtplib.SMTPConnectError,
+    smtplib.SMTPServerDisconnected,
+    smtplib.SMTPHeloError,
+    TimeoutError,
+    OSError,
+)
 
 
 class UnknownPlaceholder(ValueError):
@@ -22,11 +33,16 @@ class UnknownPlaceholder(ValueError):
 
 
 class MailFailure(Exception):
-    """One delivery failed. ``stop`` ends the whole campaign."""
+    """One delivery failed. ``stop`` ends the whole campaign.
 
-    def __init__(self, message: str, *, stop: bool) -> None:
+    ``connection`` means the message was not accepted. The campaign pauses and
+    that recipient stays queued.
+    """
+
+    def __init__(self, message: str, *, stop: bool, connection: bool = False) -> None:
         super().__init__(message)
         self.stop = stop
+        self.connection = connection
 
 
 class CopyFailure(Exception):
@@ -104,29 +120,49 @@ def _connect(settings: Settings):
     return client
 
 
-def _with_mailbox(settings: Settings, connect, action) -> None:
+def _connection_cause(exc: BaseException) -> str:
+    if isinstance(exc, TimeoutError):
+        return "timed out"
+    if isinstance(exc, ConnectionRefusedError):
+        return "connection refused"
+    if isinstance(exc, (smtplib.SMTPServerDisconnected, smtplib.SMTPHeloError)):
+        return "the server closed the connection"
+    if isinstance(exc, smtplib.SMTPConnectError):
+        return "connection refused"
+    text = str(exc).lower()
+    if "getaddrinfo" in text or "name or service" in text or "nodename" in text:
+        return "could not resolve the host"
+    if "timed out" in text or "timeout" in text:
+        return "timed out"
+    if "refused" in text:
+        return "connection refused"
+    return "could not reach the server"
+
+
+def _with_mailbox(settings: Settings, connect, action, sleeper=None) -> None:
     opener = connect or _connect
-    try:
-        with opener(settings) as client:
-            client.login(settings.smtp_username, settings.smtp_password)
-            action(client)
-    except smtplib.SMTPAuthenticationError as exc:
-        raise MailFailure("The mail server refused the mailbox login.", stop=True) from exc
-    except smtplib.SMTPRecipientsRefused as exc:
-        raise MailFailure("The mail server refused this recipient.", stop=False) from exc
-    except smtplib.SMTPSenderRefused as exc:
-        raise MailFailure("The mail server refused the sender address.", stop=True) from exc
-    except (
-        smtplib.SMTPConnectError,
-        smtplib.SMTPServerDisconnected,
-        smtplib.SMTPHeloError,
-    ) as exc:
-        raise MailFailure("Could not connect to the mail server.", stop=True) from exc
-    except smtplib.SMTPException as exc:
-        detail = str(exc)[:300] or "The mail server rejected this message."
-        raise MailFailure(detail, stop=False) from exc
-    except (TimeoutError, OSError) as exc:
-        raise MailFailure("Could not connect to the mail server.", stop=True) from exc
+    pause = sleeper or time.sleep
+    for attempt in range(_CONNECT_ATTEMPTS):
+        try:
+            with opener(settings) as client:
+                client.login(settings.smtp_username, settings.smtp_password)
+                action(client)
+            return
+        except smtplib.SMTPAuthenticationError as exc:
+            raise MailFailure("The mail server refused the mailbox login.", stop=True) from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise MailFailure("The mail server refused this recipient.", stop=False) from exc
+        except smtplib.SMTPSenderRefused as exc:
+            raise MailFailure("The mail server refused the sender address.", stop=True) from exc
+        except _CONNECT_ERRORS as exc:
+            if attempt + 1 < _CONNECT_ATTEMPTS:
+                pause(_CONNECT_BACKOFF[attempt])
+                continue
+            cause = _connection_cause(exc)
+            raise MailFailure(f"{CONNECTION_ERROR} ({cause})", stop=True, connection=True) from exc
+        except smtplib.SMTPException as exc:
+            detail = str(exc)[:300] or "The mail server rejected this message."
+            raise MailFailure(detail, stop=False) from exc
 
 
 _SENT_FALLBACK = ("INBOX.Sent", "Sent", "Sent Items")
@@ -305,13 +341,13 @@ def send_message(
     return None
 
 
-def check_mailbox(settings: Settings, *, connect=None, imap_connect=None) -> dict:
+def check_mailbox(settings: Settings, *, connect=None, imap_connect=None, sleeper=None) -> dict:
     """Log into SMTP and IMAP. No message is sent."""
 
     if not mail_configured(settings):
         return {"ok": False, "detail": "Mail is not configured."}
     try:
-        _with_mailbox(settings, connect, lambda client: None)
+        _with_mailbox(settings, connect, lambda client: None, sleeper)
     except MailFailure as exc:
         return {"ok": False, "detail": str(exc)}
     try:
