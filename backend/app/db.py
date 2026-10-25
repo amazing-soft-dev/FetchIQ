@@ -1,5 +1,5 @@
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import urlsplit
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -11,6 +11,12 @@ from app.contacts import SEED_STATUSES
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def isoformat(value: object) -> str | None:
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return None
 
 
 def assert_database_allowed(name: str) -> None:
