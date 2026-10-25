@@ -14,6 +14,7 @@ from app.config import Settings
 
 ALLOWED_PLACEHOLDERS = frozenset({"first_name", "name", "login", "email"})
 CONNECTION_ERROR = "Could not connect to the mail server."
+SENDER_ERROR = "The mail server refused the sender address."
 _TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 _CONNECT_ATTEMPTS = 3
 _CONNECT_BACKOFF = (0.5, 1.0)
@@ -140,6 +141,16 @@ def _connection_cause(exc: BaseException) -> str:
     return "could not reach the server"
 
 
+def _sender_failure(exc: smtplib.SMTPSenderRefused) -> MailFailure:
+    text = exc.smtp_error
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    reply = " ".join(str(text or "").split())
+    shown = f"{exc.smtp_code} {reply}".strip()
+    detail = f"{SENDER_ERROR} ({shown})" if shown else SENDER_ERROR
+    return MailFailure(detail[:300], stop=False, connection=True)
+
+
 def _with_mailbox(settings: Settings, connect, action, sleeper=None) -> None:
     opener = connect or _connect
     pause = sleeper or time.sleep
@@ -154,7 +165,7 @@ def _with_mailbox(settings: Settings, connect, action, sleeper=None) -> None:
         except smtplib.SMTPRecipientsRefused as exc:
             raise MailFailure("The mail server refused this recipient.", stop=False) from exc
         except smtplib.SMTPSenderRefused as exc:
-            raise MailFailure("The mail server refused the sender address.", stop=True) from exc
+            raise _sender_failure(exc) from exc
         except _CONNECT_ERRORS as exc:
             if attempt + 1 < _CONNECT_ATTEMPTS:
                 pause(_CONNECT_BACKOFF[attempt])
@@ -419,8 +430,12 @@ class SmtpMailer:
             try:
                 self._deliver(message)
                 return
-            except MailFailure:
-                raise
+            except MailFailure as exc:
+                if not str(exc).startswith(SENDER_ERROR):
+                    raise
+                self._close_smtp()
+                if attempt == 1:
+                    raise
             except _CONNECT_ERRORS as exc:
                 self._close_smtp()
                 if attempt == 1:
@@ -438,7 +453,7 @@ class SmtpMailer:
         except smtplib.SMTPRecipientsRefused as exc:
             raise MailFailure("The mail server refused this recipient.", stop=False) from exc
         except smtplib.SMTPSenderRefused as exc:
-            raise MailFailure("The mail server refused the sender address.", stop=True) from exc
+            raise _sender_failure(exc) from exc
         except smtplib.SMTPException as exc:
             if isinstance(exc, _CONNECT_ERRORS):
                 raise
