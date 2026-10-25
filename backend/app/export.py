@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from dateutil.relativedelta import relativedelta
 
-from app.contacts import evidence_by_user
+from app.contacts import candidate_user_ids, evidence_by_user, evidence_for
 from app.db import utcnow
 
 COLUMNS = [
@@ -237,17 +237,10 @@ async def _csv_lines(
     labels: dict[str, str],
     include_no_contact: bool,
 ) -> list[str]:
-    user_ids = [
-        candidate["github_user_id"]
-        for candidate in batch
-        if isinstance(candidate.get("github_user_id"), int)
-    ]
-    grouped = await evidence_by_user(db, user_ids)
+    grouped = await evidence_by_user(db, candidate_user_ids(batch))
     lines: list[str] = []
     for candidate in batch:
-        user_id = candidate.get("github_user_id")
-        evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
-        row = build_row(candidate, evidence, status_labels=labels)
+        row = build_row(candidate, evidence_for(grouped, candidate), status_labels=labels)
         if not include_no_contact and not has_public_contact(row):
             continue
         lines.append(format_csv_row([row[column] for column in COLUMNS]))

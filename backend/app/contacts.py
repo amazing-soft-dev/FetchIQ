@@ -82,30 +82,25 @@ def _stamp(document: dict) -> datetime:
     return datetime.min
 
 
-def latest_valid_email(evidence: list[dict]) -> str | None:
-    matches = [
-        item
-        for item in evidence
-        if item.get("kind") == "email"
-        and item.get("validation_status") == "valid"
-        and item.get("normalized_value")
-    ]
-    if not matches:
-        return None
-    return str(max(matches, key=_stamp)["normalized_value"])
-
-
-def latest_valid_value(evidence: list[dict], kind: str) -> str | None:
-    matches = [
+def _valid_items(evidence: list[dict], kind: str) -> list[dict]:
+    return [
         item
         for item in evidence
         if item.get("kind") == kind
         and item.get("validation_status") == "valid"
         and item.get("normalized_value")
     ]
+
+
+def latest_valid_value(evidence: list[dict], kind: str) -> str | None:
+    matches = _valid_items(evidence, kind)
     if not matches:
         return None
     return str(max(matches, key=_stamp)["normalized_value"])
+
+
+def latest_valid_email(evidence: list[dict]) -> str | None:
+    return latest_valid_value(evidence, "email")
 
 
 def merge_profile_fields(
@@ -125,44 +120,54 @@ def merge_profile_fields(
     return updates, email_changed
 
 
+_STORED_FLAGS = ("has_email", "personal", "other", "has_linkedin", "linkedin_url")
+
+
 def contact_facts(candidate: dict, evidence: list[dict]) -> dict[str, Any]:
     """Emails and LinkedIn used by filters and the review table."""
 
-    emails = [
-        str(item["normalized_value"])
-        for item in evidence
-        if item.get("kind") == "email"
-        and item.get("validation_status") == "valid"
-        and item.get("normalized_value")
-    ]
+    email_items = _valid_items(evidence, "email")
+    emails = [str(item["normalized_value"]) for item in email_items]
     stored_email = candidate.get("public_email")
     if not emails and isinstance(stored_email, str) and stored_email:
         emails = [stored_email]
     personal = any(is_personal_email(email) for email in emails)
     other = any(not is_personal_email(email) for email in emails)
     linkedin = latest_valid_value(evidence, "linkedin")
-    public_email = candidate.get("public_email") or latest_valid_email(evidence) or None
+    latest_email = str(max(email_items, key=_stamp)["normalized_value"]) if email_items else None
     return {
         "has_email": bool(emails),
         "personal": personal,
         "other": other,
         "has_linkedin": bool(linkedin),
         "linkedin_url": linkedin,
-        "public_email": public_email,
+        "public_email": stored_email or latest_email or None,
     }
+
+
+def _stored_flags(facts: dict[str, Any]) -> dict[str, Any]:
+    return {key: facts[key] for key in _STORED_FLAGS}
 
 
 def filter_fields(candidate: dict, evidence: list[dict]) -> dict[str, Any]:
     """Email and LinkedIn facts stored on a candidate so the list can page in Mongo."""
 
-    facts = contact_facts(candidate, evidence)
-    return {
-        "has_email": bool(facts["has_email"]),
-        "personal": bool(facts["personal"]),
-        "other": bool(facts["other"]),
-        "has_linkedin": bool(facts["has_linkedin"]),
-        "linkedin_url": facts["linkedin_url"],
-    }
+    return _stored_flags(contact_facts(candidate, evidence))
+
+
+def candidate_user_ids(candidates: list[dict]) -> list[int]:
+    return [
+        candidate["github_user_id"]
+        for candidate in candidates
+        if isinstance(candidate.get("github_user_id"), int)
+    ]
+
+
+def evidence_for(grouped: dict[int, list[dict]], candidate: dict) -> list[dict]:
+    user_id = candidate.get("github_user_id")
+    if not isinstance(user_id, int):
+        return []
+    return grouped.get(user_id, [])
 
 
 async def evidence_by_user(db, user_ids: list[int]) -> dict[int, list[dict]]:
@@ -192,19 +197,12 @@ async def backfill_contact_filters(db) -> int:
         )
         if not candidates:
             return updated
-        user_ids = [
-            candidate["github_user_id"]
-            for candidate in candidates
-            if isinstance(candidate.get("github_user_id"), int)
-        ]
-        grouped = await evidence_by_user(db, user_ids)
+        grouped = await evidence_by_user(db, candidate_user_ids(candidates))
         for candidate in candidates:
-            user_id = candidate.get("github_user_id")
-            evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
-            fields = filter_fields(candidate, evidence)
-            if is_blank(candidate.get("public_email")):
-                shown = contact_facts(candidate, evidence)["public_email"]
-                if shown:
-                    fields["public_email"] = shown
+            evidence = evidence_for(grouped, candidate)
+            facts = contact_facts(candidate, evidence)
+            fields = _stored_flags(facts)
+            if is_blank(candidate.get("public_email")) and facts["public_email"]:
+                fields["public_email"] = facts["public_email"]
             await db.candidates.update_one({"_id": candidate["_id"]}, {"$set": fields})
             updated += 1

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from pymongo import ReturnDocument
 
-from app.contacts import contact_facts
+from app.contacts import candidate_user_ids, contact_facts, evidence_by_user, evidence_for
 from app.db import utcnow
 from app.mail import (
     CONNECTION_ERROR,
@@ -391,18 +391,6 @@ class CampaignRunner:
         )
 
 
-async def _evidence_for(db, user_ids: list[int]) -> dict[int, list[dict]]:
-    grouped: dict[int, list[dict]] = {user_id: [] for user_id in user_ids}
-    if not user_ids:
-        return grouped
-    cursor = db.contact_evidence.find({"github_user_id": {"$in": user_ids}})
-    for item in await cursor.to_list(None):
-        user_id = item.get("github_user_id")
-        if isinstance(user_id, int):
-            grouped.setdefault(user_id, []).append(item)
-    return grouped
-
-
 async def queue_campaign(db, body) -> dict:
     """Store one campaign. Contacts without a public email are skipped, not queued."""
 
@@ -415,12 +403,7 @@ async def queue_campaign(db, body) -> dict:
         for candidate in candidates
         if isinstance(candidate.get("login"), str)
     }
-    user_ids = [
-        candidate["github_user_id"]
-        for candidate in by_login.values()
-        if isinstance(candidate.get("github_user_id"), int)
-    ]
-    grouped = await _evidence_for(db, user_ids)
+    grouped = await evidence_by_user(db, candidate_user_ids(list(by_login.values())))
     now = utcnow()
     campaign_id = str(uuid4())
     rows: list[dict] = []
@@ -431,8 +414,7 @@ async def queue_campaign(db, body) -> dict:
             rows.append(_recipient(campaign_id, position, login, None, None, "skipped", now))
             rows[-1]["error"] = "Contact was not found."
             continue
-        user_id = candidate.get("github_user_id")
-        evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
+        evidence = evidence_for(grouped, candidate)
         email = contact_facts(candidate, evidence).get("public_email")
         name = candidate.get("name") if isinstance(candidate.get("name"), str) else None
         if not email:
