@@ -72,4 +72,11 @@ jobs:
           fi
 
           title="$(git log -1 --format=%s "origin/$head")"
-          gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "Opened automatically from \`$head\`."
+          closes="$(git log "origin/$base..origin/$head" --format=%B | grep -E '^(Closes|Fixes|Resolves) #[0-9]+$' || true)"
+          body="Opened automatically from \`$head\`."
+          if [ -n "$closes" ]; then
+            body="$body
+
+$closes"
+          fi
+          gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "$body"

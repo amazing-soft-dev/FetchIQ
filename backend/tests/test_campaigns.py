@@ -3,6 +3,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.campaigns import INTERRUPTED, WAIT_STEP_SECONDS, CampaignRunner
@@ -32,11 +33,15 @@ class FakeMailer:
         stop: bool = False,
         copy_error: str | None = None,
         connection_failures: int = 0,
+        sender_failures: int = 0,
+        sender_detail: str = "The mail server refused the sender address. (553 5.7.1 denied)",
     ) -> None:
         self.refuse = refuse or set()
         self.stop = stop
         self.copy_error = copy_error
         self.connection_failures = connection_failures
+        self.sender_failures = sender_failures
+        self.sender_detail = sender_detail
         self.sent: list[str] = []
         self.copies: list[tuple] = []
 
@@ -51,6 +56,9 @@ class FakeMailer:
                 stop=True,
                 connection=True,
             )
+        if self.sender_failures > 0:
+            self.sender_failures -= 1
+            raise MailFailure(self.sender_detail, stop=False, connection=True)
         if recipient in self.refuse:
             raise MailFailure("The mail server refused this recipient.", stop=self.stop)
         self.sent.append(recipient)
@@ -174,6 +182,46 @@ async def test_authentication_failure_stops_before_the_next_recipient(db) -> Non
     assert finished.json()["status"] == "failed"
     grace = await db.campaign_recipients.find_one({"login": "grace"})
     assert grace["status"] == "queued"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "The mail server refused the sender address. (450 try later)",
+        "The mail server refused the sender address. (553 5.7.1 denied)",
+    ],
+)
+async def test_sender_refusal_waits_and_continues(db, detail: str) -> None:
+    await db.candidates.insert_many(
+        [
+            _candidate("ada", "ada@example.com", github_user_id=7),
+            _candidate("grace", "grace@example.com", github_user_id=8),
+        ]
+    )
+    mailer = FakeMailer(sender_failures=1, sender_detail=detail)
+    clock = Clock()
+    runner = CampaignRunner(db, mailer, sleeper=clock.sleep, clock=clock.now)
+    app = create_app(
+        settings=Settings(database_name="fetchiq_test"),
+        db=db,
+        mailer=mailer,
+        campaigns=runner,
+    )
+    async with _http(app) as client:
+        created = await client.post(
+            "/api/campaigns",
+            json=_payload(logins=["ada", "grace"]),
+        )
+        assert created.status_code == 201
+        await _drain(app, created.json()["id"])
+        finished = await client.get(f"/api/campaigns/{created.json()['id']}")
+    assert finished.json()["status"] == "succeeded"
+    assert finished.json()["error"] is None
+    assert mailer.sent == ["ada@example.com", "grace@example.com"]
+    ada = await db.campaign_recipients.find_one({"login": "ada"})
+    assert ada["status"] == "sent"
+    assert ada["error"] is None
+    assert clock.sleeps == [WAIT_STEP_SECONDS] * 24
 
 
 async def test_connection_failure_waits_and_continues(db) -> None:
