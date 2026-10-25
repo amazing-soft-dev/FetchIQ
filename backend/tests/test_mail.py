@@ -80,6 +80,25 @@ def test_recipient_refusal_does_not_stop_the_campaign() -> None:
     assert caught.value.stop is False
 
 
+def test_sender_refusal_keeps_the_server_reply() -> None:
+    client = _Client(smtplib.SMTPSenderRefused(553, b"5.7.1 denied", "ada@example.com"))
+
+    def connect(settings):
+        return client
+
+    with pytest.raises(MailFailure) as caught:
+        send_message(
+            _settings(),
+            recipient="ada@example.com",
+            subject="Hello",
+            body="Hi",
+            connect=connect,
+        )
+    assert caught.value.stop is False
+    assert caught.value.connection is True
+    assert str(caught.value) == "The mail server refused the sender address. (553 5.7.1 denied)"
+
+
 def test_authentication_failure_stops_the_campaign() -> None:
     client = _Client(smtplib.SMTPAuthenticationError(535, b"no"))
 
@@ -220,8 +239,13 @@ def test_dropped_connection_is_retried() -> None:
 
 
 class _SessionSmtp:
-    def __init__(self, fail_on_send: int | None = None) -> None:
+    def __init__(
+        self,
+        fail_on_send: int | None = None,
+        sender_refusal: tuple[int, bytes] | None = None,
+    ) -> None:
         self.fail_on_send = fail_on_send
+        self.sender_refusal = sender_refusal
         self.messages: list = []
         self.sends = 0
         self.closed = False
@@ -231,6 +255,9 @@ class _SessionSmtp:
 
     def send_message(self, message) -> None:
         self.sends += 1
+        if self.sender_refusal is not None:
+            code, text = self.sender_refusal
+            raise smtplib.SMTPSenderRefused(code, text, "ada@example.com")
         if self.fail_on_send is not None and self.sends == self.fail_on_send:
             raise smtplib.SMTPServerDisconnected("bye")
         self.messages.append(message)
@@ -281,6 +308,46 @@ def test_smtp_session_is_reused_and_sent_folder_is_resolved_once() -> None:
     assert len(smtp_opens[0].messages) == 2
     assert imap_opens[0].lists == 1
     assert imap_opens[0].appended == ["INBOX.Sent", "INBOX.Sent"]
+
+
+def test_sender_refusal_reconnects_and_the_next_message_is_sent() -> None:
+    smtp_opens: list[_SessionSmtp] = []
+
+    def connect(settings):
+        refusal = (421, b"try again") if not smtp_opens else None
+        client = _SessionSmtp(sender_refusal=refusal)
+        smtp_opens.append(client)
+        return client
+
+    def imap_connect(settings):
+        return _SessionImap()
+
+    mailer = SmtpMailer(_settings(), connect=connect, imap_connect=imap_connect)
+    assert mailer.send(recipient="a@example.com", subject="Hi", body="One") is None
+    assert mailer.send(recipient="b@example.com", subject="Hi", body="Two") is None
+    assert len(smtp_opens) == 2
+    assert smtp_opens[0].closed is True
+    assert smtp_opens[0].messages == []
+    assert len(smtp_opens[1].messages) == 2
+
+
+@pytest.mark.parametrize("code", [450, 553])
+def test_repeated_sender_refusal_does_not_stop(code: int) -> None:
+    smtp_opens: list[_SessionSmtp] = []
+
+    def connect(settings):
+        client = _SessionSmtp(sender_refusal=(code, b"denied"))
+        smtp_opens.append(client)
+        return client
+
+    mailer = SmtpMailer(_settings(), connect=connect)
+    with pytest.raises(MailFailure) as caught:
+        mailer.send(recipient="a@example.com", subject="Hi", body="One")
+    assert caught.value.stop is False
+    assert caught.value.connection is True
+    assert str(caught.value) == f"The mail server refused the sender address. ({code} denied)"
+    assert len(smtp_opens) == 2
+    assert all(client.closed for client in smtp_opens)
 
 
 def test_dropped_smtp_session_reconnects_once() -> None:
