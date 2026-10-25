@@ -29,7 +29,7 @@ import { ChoiceSelect } from "./ui/choice-select";
 import { Field } from "./ui/field";
 import { Input } from "./ui/input";
 
-const PAGE_SIZES = [25, 50, 100] as const;
+const PAGE_SIZES = [25, 50, 100, 200, 500] as const;
 const NOT_SET_LABEL = "Not set";
 
 function readQuery(params: URLSearchParams): ContactQuery {
@@ -40,7 +40,7 @@ function readQuery(params: URLSearchParams): ContactQuery {
   const linkedin = params.get("linkedin");
   return {
     page: Number.isFinite(page) && page > 0 ? page : 1,
-    page_size: pageSize === 50 || pageSize === 100 ? pageSize : 25,
+    page_size: PAGE_SIZES.includes(pageSize as (typeof PAGE_SIZES)[number]) ? pageSize : 25,
     email: email === "has" || email === "missing" ? email : "any",
     email_kind: emailKind === "personal" || emailKind === "other" ? emailKind : "any",
     linkedin: linkedin === "has" || linkedin === "missing" ? linkedin : "any",
@@ -171,6 +171,43 @@ export function ContactsBrowser() {
   const allVisible = visible.length > 0 && visible.every((login) => selected.has(login));
   const someVisible = visible.some((login) => selected.has(login));
   const pages = Math.max(1, Math.ceil(total / (query.page_size || 25)));
+  const page = query.page || 1;
+
+  function pager(className: string) {
+    return (
+      <div className={cn("flex flex-wrap items-center gap-2", className)}>
+        <label className="flex items-center gap-2 text-[13px] font-medium text-muted">
+          Per page
+          <ChoiceSelect
+            ariaLabel="Per page"
+            value={String(query.page_size || 25)}
+            onValueChange={(value) => replace({ page_size: value }, true)}
+            triggerClassName="w-20"
+            options={PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
+          />
+        </label>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={page <= 1}
+          onClick={() => replace({ page: String(page - 1) }, false)}
+        >
+          Previous
+        </Button>
+        <p className="text-sm text-muted">
+          Page {query.page} of {pages}
+        </p>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={page >= pages}
+          onClick={() => replace({ page: String(page + 1) }, false)}
+        >
+          Next
+        </Button>
+      </div>
+    );
+  }
   const labels = new Map(statuses.map((status) => [status.id, status.label]));
   const selectedCountries = (query.country ?? []).filter(Boolean);
   const locationOptions = [
@@ -524,16 +561,7 @@ export function ContactsBrowser() {
             </Button>
           </>
         ) : null}
-        <label className="ml-auto flex items-center gap-2 text-[13px] font-medium text-muted">
-          Per page
-          <ChoiceSelect
-            ariaLabel="Per page"
-            value={String(query.page_size || 25)}
-            onValueChange={(value) => replace({ page_size: value }, true)}
-            triggerClassName="w-20"
-            options={PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
-          />
-        </label>
+        {pager("ml-auto")}
       </div>
       <MessageComposer
         open={composing}
@@ -641,27 +669,7 @@ export function ContactsBrowser() {
           </tbody>
         </table>
       </div>
-      <div className="mt-3 flex items-center justify-end gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={(query.page || 1) <= 1}
-          onClick={() => replace({ page: String((query.page || 1) - 1) }, false)}
-        >
-          Previous
-        </Button>
-        <p className="text-sm text-muted">
-          Page {query.page} of {pages}
-        </p>
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={(query.page || 1) >= pages}
-          onClick={() => replace({ page: String((query.page || 1) + 1) }, false)}
-        >
-          Next
-        </Button>
-      </div>
+      {pager("mt-3 w-full justify-end")}
     </section>
   );
 }
