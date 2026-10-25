@@ -197,7 +197,7 @@ def _check_filters(email: str, email_kind: str, linkedin: str, page: int, page_s
     if page < 1:
         raise HTTPException(status_code=422, detail="page must be at least 1")
     if page_size not in PAGE_SIZES:
-        raise HTTPException(status_code=422, detail="page size must be 25, 50, or 100")
+        raise HTTPException(status_code=422, detail="page size must be 25, 50, 100, 200, or 500")
 
 
 @router.get("/outreach-statuses")
