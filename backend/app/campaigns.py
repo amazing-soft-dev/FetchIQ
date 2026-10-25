@@ -11,6 +11,7 @@ from pymongo import ReturnDocument
 from app.contacts import contact_facts
 from app.db import utcnow
 from app.mail import (
+    CONNECTION_ERROR,
     CopyFailure,
     Mailer,
     MailFailure,
@@ -223,9 +224,14 @@ class CampaignRunner:
                 body=body,
             )
         except MailFailure as exc:
-            await self._mark(recipient["_id"], "failed", str(exc)[:300])
+            detail = str(exc)[:300]
+            if exc.connection:
+                await self._mark(recipient["_id"], "queued", None)
+                await self._finish(campaign_id, "paused", detail)
+                return True
+            await self._mark(recipient["_id"], "failed", detail)
             if exc.stop:
-                await self._finish(campaign_id, "failed", str(exc)[:300])
+                await self._finish(campaign_id, "failed", detail)
                 return True
             return False
         except UnknownPlaceholder as exc:
@@ -264,6 +270,37 @@ class CampaignRunner:
             if copied_at is not None:
                 fields["copied_at"] = copied_at
         await self.db.campaign_recipients.update_one({"_id": recipient_id}, {"$set": fields})
+
+    async def recover_connection_failures(self) -> None:
+        """Pause a campaign stopped by a dropped connection and requeue that send.
+
+        The message was not accepted, so Resume can try it again. This does not
+        start sending.
+        """
+
+        cursor = self.db.campaigns.find({"status": "failed"})
+        async for campaign in cursor:
+            error = campaign.get("error")
+            if not isinstance(error, str) or not error.startswith(CONNECTION_ERROR):
+                continue
+            rows = self.db.campaign_recipients.find(
+                {"campaign_id": campaign["_id"], "status": "failed", "sent_at": None}
+            )
+            async for recipient in rows:
+                message = recipient.get("error")
+                if not isinstance(message, str) or not message.startswith(CONNECTION_ERROR):
+                    continue
+                await self._mark(recipient["_id"], "queued", None)
+            await self.db.campaigns.update_one(
+                {"_id": campaign["_id"]},
+                {
+                    "$set": {
+                        "status": "paused",
+                        "control": None,
+                        "updated_at": self.clock(),
+                    }
+                },
+            )
 
     async def copy_sent(self) -> None:
         """File Sent copies for accepted messages that do not have one yet."""
