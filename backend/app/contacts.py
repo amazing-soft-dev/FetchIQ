@@ -50,7 +50,7 @@ FILL_FIELDS = (
     "public_repos_count",
 )
 
-PAGE_SIZES = frozenset({25, 50, 100})
+PAGE_SIZES = frozenset({25, 50, 100, 200, 500})
 NOT_SET = "none"
 _STATUS_ID = re.compile(r"[^a-z0-9]+")
 
