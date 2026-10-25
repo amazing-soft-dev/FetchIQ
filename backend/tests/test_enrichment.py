@@ -375,6 +375,11 @@ async def test_profile_api_email_is_stored_and_noreply_is_ignored(db) -> None:
 
     stored = await db.candidates.find_one({"github_user_id": 7})
     assert stored["public_email"] == "Ada@example.com"
+    assert stored["has_email"] is True
+    assert stored["personal"] is False
+    assert stored["other"] is True
+    assert stored["has_linkedin"] is False
+    assert stored["linkedin_url"] is None
     assert stored["country"] == "Germany"
     assert stored["utc_offset"] is None
     emails = await db.contact_evidence.find({"kind": "email"}).to_list(10)
@@ -548,6 +553,8 @@ async def test_merge_fills_gaps_and_resets_status_only_when_the_email_changes(db
     assert stored["name"] == "Ada Lovelace"
     assert stored["company"] == "Analytical Engines"
     assert stored["public_email"] == "ada@example.com"
+    assert stored["has_email"] is True
+    assert stored["other"] is True
     assert stored["outreach_status"] == "interested"
     assert stored["country"] == "Germany"
 
@@ -563,6 +570,9 @@ async def test_merge_fills_gaps_and_resets_status_only_when_the_email_changes(db
     assert changed["name"] == "Ada Lovelace"
     assert changed["company"] == "Analytical Engines"
     assert changed["public_email"] == "grace@example.com"
+    assert changed["has_email"] is True
+    assert changed["personal"] is False
+    assert changed["other"] is True
     assert "outreach_status" not in changed
 
 

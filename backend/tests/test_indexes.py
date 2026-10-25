@@ -20,6 +20,10 @@ async def test_required_indexes_exist(db) -> None:
     assert "uniq_job_user" not in candidate_indexes
     assert candidate_indexes["uniq_login"]["unique"] is True
     assert candidate_indexes["uniq_login"]["key"] == [("login", 1)]
+    assert candidate_indexes["candidate_checked_login"]["key"] == [
+        ("last_checked_at", -1),
+        ("login", 1),
+    ]
     assert evidence_indexes["uniq_evidence"]["unique"] is True
     assert evidence_indexes["uniq_evidence"]["key"] == [
         ("github_user_id", 1),

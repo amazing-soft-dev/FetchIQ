@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -153,6 +153,65 @@ async def test_contacts_filter_page_and_bulk_status(db) -> None:
             assert cleared.status_code == 200
             linus = await db.candidates.find_one({"login": "linus"})
             assert "outreach_status" not in linus
+
+
+@pytest.mark.asyncio
+async def test_filtered_contacts_page_without_loading_evidence(db) -> None:
+    rows = []
+    for index in range(26):
+        rows.append(
+            _candidate(
+                f"user{index:02d}",
+                github_user_id=100 + index,
+                public_email=f"user{index:02d}@gmail.com",
+                has_email=True,
+                personal=True,
+                other=False,
+                has_linkedin=False,
+                linkedin_url=None,
+                last_checked_at=datetime(2024, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            )
+        )
+    rows.append(
+        _candidate(
+            "work",
+            github_user_id=9,
+            public_email="work@example.com",
+            has_email=True,
+            personal=False,
+            other=True,
+            has_linkedin=False,
+            linkedin_url=None,
+            last_checked_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+    )
+    await db.candidates.insert_many(rows)
+    app, transport = await _client(db)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.get(
+                "/api/contacts",
+                params={"email_kind": "personal", "page": 1, "page_size": 25},
+            )
+            second = await client.get(
+                "/api/contacts",
+                params={"email_kind": "personal", "page": 2, "page_size": 25},
+            )
+            logins = await client.get("/api/contacts/logins", params={"email_kind": "personal"})
+    assert first.status_code == 200
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body["total"] == 26
+    assert len(first_body["contacts"]) == 25
+    assert first_body["contacts"][0]["login"] == "user25"
+    assert first_body["contacts"][0]["email_kinds"] == ["personal"]
+    assert second_body["total"] == 26
+    assert [item["login"] for item in second_body["contacts"]] == ["user00"]
+    assert "work" not in {item["login"] for item in first_body["contacts"]}
+    assert logins.json()["total"] == 26
+    assert logins.json()["logins"][0] == "user25"
+    assert logins.json()["logins"][-1] == "user00"
+    assert "work" not in logins.json()["logins"]
 
 
 @pytest.mark.asyncio

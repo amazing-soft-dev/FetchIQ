@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from dateutil.relativedelta import relativedelta
 
+from app.contacts import evidence_by_user
 from app.db import utcnow
 
 COLUMNS = [
@@ -226,6 +227,33 @@ def dedupe_candidates(candidates: list[dict]) -> list[dict]:
     return [chosen[user_id] for user_id in sorted(chosen)]
 
 
+_CSV_BATCH = 200
+
+
+async def _csv_lines(
+    db,
+    batch: list[dict],
+    *,
+    labels: dict[str, str],
+    include_no_contact: bool,
+) -> list[str]:
+    user_ids = [
+        candidate["github_user_id"]
+        for candidate in batch
+        if isinstance(candidate.get("github_user_id"), int)
+    ]
+    grouped = await evidence_by_user(db, user_ids)
+    lines: list[str] = []
+    for candidate in batch:
+        user_id = candidate.get("github_user_id")
+        evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
+        row = build_row(candidate, evidence, status_labels=labels)
+        if not include_no_contact and not has_public_contact(row):
+            continue
+        lines.append(format_csv_row([row[column] for column in COLUMNS]))
+    return lines
+
+
 async def stream_job_csv(db, job_id: str, *, include_no_contact: bool) -> AsyncIterator[str]:
     """Yield CSV lines from a Mongo cursor without holding every candidate."""
 
@@ -238,13 +266,21 @@ async def stream_job_csv(db, job_id: str, *, include_no_contact: bool) -> AsyncI
         [("github_user_id", 1), ("last_checked_at", -1)]
     )
     seen: set[int] = set()
+    pending: list[dict] = []
     async for candidate in cursor:
         user_id = candidate["github_user_id"]
         if user_id in seen:
             continue
         seen.add(user_id)
-        evidence = await db.contact_evidence.find({"github_user_id": user_id}).to_list(None)
-        row = build_row(candidate, evidence, status_labels=labels)
-        if not include_no_contact and not has_public_contact(row):
-            continue
-        yield format_csv_row([row[column] for column in COLUMNS])
+        pending.append(candidate)
+        if len(pending) >= _CSV_BATCH:
+            for line in await _csv_lines(
+                db, pending, labels=labels, include_no_contact=include_no_contact
+            ):
+                yield line
+            pending = []
+    if pending:
+        for line in await _csv_lines(
+            db, pending, labels=labels, include_no_contact=include_no_contact
+        ):
+            yield line

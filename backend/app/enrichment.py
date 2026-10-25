@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 from pymongo.errors import DuplicateKeyError
 
-from app.contacts import is_blank, latest_valid_email, merge_profile_fields
+from app.contacts import filter_fields, is_blank, latest_valid_email, merge_profile_fields
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
@@ -367,10 +367,8 @@ class EnrichmentService:
             "matched_keywords": "",
             "relevant_repository_urls": "",
         }
+        evidence = await self._contact_evidence(candidate["github_user_id"])
         if merging:
-            evidence = await self.db.contact_evidence.find(
-                {"github_user_id": candidate["github_user_id"], "kind": "email"}
-            ).to_list(None)
             chosen = latest_valid_email(evidence)
             filled, email_changed = merge_profile_fields(candidate, incoming, chosen)
             filled["enrichment_status"] = "enriched"
@@ -378,11 +376,14 @@ class EnrichmentService:
             filled["updated_at"] = now
             if is_blank(candidate.get("collection_status")):
                 filled["collection_status"] = "enriched"
+            final_email = filled.get("public_email", candidate.get("public_email"))
+            filled.update(filter_fields({"public_email": final_email}, evidence))
             update: dict[str, Any] = {"$set": filled, "$unset": obsolete}
             if email_changed:
                 update["$unset"]["outreach_status"] = ""
             await self.db.candidates.update_one({"_id": candidate["_id"]}, update)
         else:
+            flags = filter_fields({"public_email": incoming.get("public_email")}, evidence)
             await self.db.candidates.update_one(
                 {"_id": candidate["_id"]},
                 {
@@ -392,6 +393,7 @@ class EnrichmentService:
                         "collection_status": "enriched",
                         "last_checked_at": now,
                         "updated_at": now,
+                        **flags,
                     },
                     "$unset": obsolete,
                 },
@@ -404,6 +406,9 @@ class EnrichmentService:
             return None, []
         html = response.text
         return parse_utc_offset(html), parse_profile_emails(html)
+
+    async def _contact_evidence(self, github_user_id: int) -> list[dict]:
+        return await self.db.contact_evidence.find({"github_user_id": github_user_id}).to_list(None)
 
     async def _stored_kinds(self, github_user_id: int) -> set[str]:
         cursor = self.db.contact_evidence.find({"github_user_id": github_user_id}, {"kind": 1})

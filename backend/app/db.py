@@ -34,6 +34,10 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.candidates.create_index([("login", 1)], unique=True, name="uniq_login")
     await db.candidates.create_index([("outreach_status", 1)], name="candidate_outreach_status")
     await db.candidates.create_index([("public_email", 1)], name="candidate_public_email")
+    await db.candidates.create_index(
+        [("last_checked_at", -1), ("login", 1)],
+        name="candidate_checked_login",
+    )
     await ensure_outreach_statuses(db)
     await db.contact_evidence.create_index(
         [("github_user_id", 1), ("kind", 1), ("normalized_value", 1)],

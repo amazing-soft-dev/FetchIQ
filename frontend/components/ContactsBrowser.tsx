@@ -366,31 +366,31 @@ export function ContactsBrowser() {
       >
         <div className="grid grid-cols-2 items-start gap-3 min-[721px]:grid-cols-4">
           <div className="col-span-1 min-[721px]:col-span-2">
-            <ChipMultiSelect
-              label="Location"
-              placeholder="Search and add locations..."
-              options={locationOptions}
-              value={locationValue}
-              onChange={(next) =>
-                replace(
-                  {
-                    country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
-                  },
-                  true,
-                )
-              }
-              countNoun="location"
-            />
+            <Field label="Search">
+              <Input
+                ref={searchRef}
+                key={query.q || ""}
+                type="search"
+                defaultValue={query.q || ""}
+                placeholder="Username, name, or email"
+              />
+            </Field>
           </div>
-          <Field label="Search">
-            <Input
-              ref={searchRef}
-              key={query.q || ""}
-              type="search"
-              defaultValue={query.q || ""}
-              placeholder="Username, name, or email"
-            />
-          </Field>
+          <ChipMultiSelect
+            label="Location"
+            placeholder="Search and add locations..."
+            options={locationOptions}
+            value={locationValue}
+            onChange={(next) =>
+              replace(
+                {
+                  country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
+                },
+                true,
+              )
+            }
+            countNoun="location"
+          />
           <ChoiceSelect
             label="Public email"
             value={emailFilterValue(query)}
