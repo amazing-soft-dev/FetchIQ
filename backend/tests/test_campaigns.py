@@ -31,10 +31,12 @@ class FakeMailer:
         refuse: set[str] | None = None,
         stop: bool = False,
         copy_error: str | None = None,
+        connection_failures: int = 0,
     ) -> None:
         self.refuse = refuse or set()
         self.stop = stop
         self.copy_error = copy_error
+        self.connection_failures = connection_failures
         self.sent: list[str] = []
         self.copies: list[tuple] = []
 
@@ -42,6 +44,13 @@ class FakeMailer:
         return True
 
     def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+        if self.connection_failures > 0:
+            self.connection_failures -= 1
+            raise MailFailure(
+                "Could not connect to the mail server. (timed out)",
+                stop=True,
+                connection=True,
+            )
         if recipient in self.refuse:
             raise MailFailure("The mail server refused this recipient.", stop=self.stop)
         self.sent.append(recipient)
@@ -165,6 +174,129 @@ async def test_authentication_failure_stops_before_the_next_recipient(db) -> Non
     assert finished.json()["status"] == "failed"
     grace = await db.campaign_recipients.find_one({"login": "grace"})
     assert grace["status"] == "queued"
+
+
+async def test_connection_failure_pauses_and_resume_sends(db) -> None:
+    await db.candidates.insert_many(
+        [
+            _candidate("ada", "ada@example.com", github_user_id=7),
+            _candidate("grace", "grace@example.com", github_user_id=8),
+        ]
+    )
+    mailer = FakeMailer(connection_failures=1)
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with _http(app) as client:
+        created = await client.post(
+            "/api/campaigns",
+            json=_payload(logins=["ada", "grace"]),
+        )
+        assert created.status_code == 201
+        campaign_id = created.json()["id"]
+        await _drain(app, campaign_id)
+        paused = await client.get(f"/api/campaigns/{campaign_id}")
+        assert paused.json()["status"] == "paused"
+        assert paused.json()["error"] == "Could not connect to the mail server. (timed out)"
+        assert mailer.sent == []
+        ada = await db.campaign_recipients.find_one({"login": "ada"})
+        grace = await db.campaign_recipients.find_one({"login": "grace"})
+        assert ada["status"] == "queued"
+        assert ada["error"] is None
+        assert grace["status"] == "queued"
+        resumed = await client.post(f"/api/campaigns/{campaign_id}/resume")
+        assert resumed.status_code == 200
+        await _drain(app, campaign_id)
+        finished = await client.get(f"/api/campaigns/{campaign_id}")
+    assert finished.json()["status"] == "succeeded"
+    assert mailer.sent == ["ada@example.com", "grace@example.com"]
+
+
+async def test_startup_requeues_a_dropped_connection(db) -> None:
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    await db.campaigns.insert_many(
+        [
+            {
+                "_id": "camp-drop",
+                "subject": "Hello",
+                "body": "Hi",
+                "hourly_limit": 10,
+                "delay_min_seconds": 0,
+                "delay_max_seconds": 0,
+                "status": "failed",
+                "control": None,
+                "error": "Could not connect to the mail server.",
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "_id": "camp-auth",
+                "subject": "Hello",
+                "body": "Hi",
+                "status": "failed",
+                "error": "The mail server refused the mailbox login.",
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+    )
+    await db.campaign_recipients.insert_many(
+        [
+            {
+                "_id": "row-drop",
+                "campaign_id": "camp-drop",
+                "position": 12,
+                "login": "sebastianAnger",
+                "name": "Sebastian",
+                "to_email": "sebastian@example.com",
+                "status": "failed",
+                "error": "Could not connect to the mail server.",
+                "sent_at": None,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "_id": "row-sent",
+                "campaign_id": "camp-drop",
+                "position": 0,
+                "login": "ada",
+                "name": "Ada",
+                "to_email": "ada@example.com",
+                "status": "sent",
+                "error": None,
+                "sent_at": now,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "_id": "row-refused",
+                "campaign_id": "camp-drop",
+                "position": 1,
+                "login": "bad",
+                "name": "Bad",
+                "to_email": "bad@example.com",
+                "status": "failed",
+                "error": "The mail server refused this recipient.",
+                "sent_at": None,
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+    )
+    mailer = FakeMailer()
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with app.router.lifespan_context(app):
+        assert mailer.sent == []
+    campaign = await db.campaigns.find_one({"_id": "camp-drop"})
+    assert campaign["status"] == "paused"
+    assert campaign["error"] == "Could not connect to the mail server."
+    dropped = await db.campaign_recipients.find_one({"login": "sebastianAnger"})
+    assert dropped["status"] == "queued"
+    assert dropped["error"] is None
+    sent = await db.campaign_recipients.find_one({"login": "ada"})
+    assert sent["status"] == "sent"
+    refused = await db.campaign_recipients.find_one({"login": "bad"})
+    assert refused["status"] == "failed"
+    auth = await db.campaigns.find_one({"_id": "camp-auth"})
+    assert auth["status"] == "failed"
 
 
 async def test_unknown_placeholder_and_missing_mail_are_rejected(db) -> None:
