@@ -52,7 +52,17 @@ function readQuery(params: URLSearchParams): ContactQuery {
 }
 
 function kindLabel(kind: "personal" | "other"): string {
-  return kind === "personal" ? "Personal" : "Other";
+  return kind === "personal" ? "Personal" : "Work";
+}
+
+function emailFilterValue(query: ContactQuery): string {
+  if (query.email === "missing") {
+    return "missing";
+  }
+  if (query.email_kind === "personal" || query.email_kind === "other") {
+    return query.email_kind;
+  }
+  return "any";
 }
 
 export function ContactsBrowser() {
@@ -356,49 +366,46 @@ export function ContactsBrowser() {
       >
         <div className="grid grid-cols-2 items-start gap-3 min-[721px]:grid-cols-4">
           <div className="col-span-1 min-[721px]:col-span-2">
-            <ChipMultiSelect
-              label="Location"
-              placeholder="Search and add locations..."
-              options={locationOptions}
-              value={locationValue}
-              onChange={(next) =>
-                replace(
-                  {
-                    country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
-                  },
-                  true,
-                )
-              }
-              countNoun="location"
-            />
+            <Field label="Search">
+              <Input
+                ref={searchRef}
+                key={query.q || ""}
+                type="search"
+                defaultValue={query.q || ""}
+                placeholder="Username, name, or email"
+              />
+            </Field>
           </div>
-          <Field label="Search">
-            <Input
-              ref={searchRef}
-              key={query.q || ""}
-              type="search"
-              defaultValue={query.q || ""}
-              placeholder="Username, name, or email"
-            />
-          </Field>
-          <ChoiceSelect
-            label="Public email"
-            value={query.email || "any"}
-            onValueChange={(value) => replace({ email: value }, true)}
-            options={[
-              { value: "any", label: "Any" },
-              { value: "has", label: "Has one" },
-              { value: "missing", label: "Has none" },
-            ]}
+          <ChipMultiSelect
+            label="Location"
+            placeholder="Search and add locations..."
+            options={locationOptions}
+            value={locationValue}
+            onChange={(next) =>
+              replace(
+                {
+                  country: next.map((item) => (item === NOT_SET_LABEL ? "none" : item)),
+                },
+                true,
+              )
+            }
+            countNoun="location"
           />
           <ChoiceSelect
-            label="Email kind"
-            value={query.email_kind || "any"}
-            onValueChange={(value) => replace({ email_kind: value }, true)}
+            label="Public email"
+            value={emailFilterValue(query)}
+            onValueChange={(value) => {
+              if (value === "personal" || value === "other") {
+                replace({ email: null, email_kind: value }, true);
+                return;
+              }
+              replace({ email: value === "any" ? null : value, email_kind: null }, true);
+            }}
             options={[
               { value: "any", label: "Any" },
               { value: "personal", label: "Personal" },
-              { value: "other", label: "Other" },
+              { value: "other", label: "Work" },
+              { value: "missing", label: "None" },
             ]}
           />
           <ChoiceSelect
@@ -434,13 +441,6 @@ export function ContactsBrowser() {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button type="submit">Search</Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => replace({ email: "missing", linkedin: "has" }, true)}
-          >
-            LinkedIn, no email
-          </Button>
           <details
             className="[&:not([open])>:not(summary)]:hidden open:basis-full open:rounded-control open:border open:border-line open:bg-header open:p-3"
             onKeyDown={(event) => {
