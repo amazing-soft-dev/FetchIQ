@@ -152,23 +152,59 @@ def contact_facts(candidate: dict, evidence: list[dict]) -> dict[str, Any]:
     }
 
 
-def matches_contact_filters(
-    facts: dict[str, Any],
-    *,
-    email: str,
-    email_kind: str,
-    linkedin: str,
-) -> bool:
-    if email == "has" and not facts["has_email"]:
-        return False
-    if email == "missing" and facts["has_email"]:
-        return False
-    if email_kind == "personal" and not facts["personal"]:
-        return False
-    if email_kind == "other" and not facts["other"]:
-        return False
-    if linkedin == "has" and not facts["has_linkedin"]:
-        return False
-    if linkedin == "missing" and facts["has_linkedin"]:
-        return False
-    return True
+def filter_fields(candidate: dict, evidence: list[dict]) -> dict[str, Any]:
+    """Email and LinkedIn facts stored on a candidate so the list can page in Mongo."""
+
+    facts = contact_facts(candidate, evidence)
+    return {
+        "has_email": bool(facts["has_email"]),
+        "personal": bool(facts["personal"]),
+        "other": bool(facts["other"]),
+        "has_linkedin": bool(facts["has_linkedin"]),
+        "linkedin_url": facts["linkedin_url"],
+    }
+
+
+async def evidence_by_user(db, user_ids: list[int]) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {user_id: [] for user_id in user_ids}
+    if not user_ids:
+        return grouped
+    cursor = db.contact_evidence.find({"github_user_id": {"$in": user_ids}})
+    for item in await cursor.to_list(None):
+        user_id = item.get("github_user_id")
+        if isinstance(user_id, int):
+            grouped.setdefault(user_id, []).append(item)
+    return grouped
+
+
+_BACKFILL_BATCH = 200
+
+
+async def backfill_contact_filters(db) -> int:
+    """Fill email and LinkedIn flags on candidates that do not have them yet."""
+
+    updated = 0
+    while True:
+        candidates = await (
+            db.candidates.find({"has_email": {"$exists": False}}).limit(_BACKFILL_BATCH).to_list(
+                _BACKFILL_BATCH
+            )
+        )
+        if not candidates:
+            return updated
+        user_ids = [
+            candidate["github_user_id"]
+            for candidate in candidates
+            if isinstance(candidate.get("github_user_id"), int)
+        ]
+        grouped = await evidence_by_user(db, user_ids)
+        for candidate in candidates:
+            user_id = candidate.get("github_user_id")
+            evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
+            fields = filter_fields(candidate, evidence)
+            if is_blank(candidate.get("public_email")):
+                shown = contact_facts(candidate, evidence)["public_email"]
+                if shown:
+                    fields["public_email"] = shown
+            await db.candidates.update_one({"_id": candidate["_id"]}, {"$set": fields})
+            updated += 1

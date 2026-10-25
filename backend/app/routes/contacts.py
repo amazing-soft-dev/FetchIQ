@@ -7,13 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.contacts import (
-    NOT_SET,
-    PAGE_SIZES,
-    contact_facts,
-    matches_contact_filters,
-    status_slug,
-)
+from app.contacts import NOT_SET, PAGE_SIZES, evidence_by_user, status_slug
 from app.db import utcnow
 from app.export import COLUMNS, build_row, format_csv_row
 
@@ -90,12 +84,18 @@ async def _label_taken(db, label: str, *, ignore_id: str | None = None) -> bool:
     return False
 
 
+_CANDIDATE_SORT = [("last_checked_at", -1), ("login", 1)]
+
+
 def _candidate_query(
     *,
     q: str,
     job_id: str,
     statuses: list[str],
     countries: list[str],
+    email: str = "any",
+    email_kind: str = "any",
+    linkedin: str = "any",
 ) -> dict:
     parts: list[dict] = []
     if job_id:
@@ -150,6 +150,18 @@ def _candidate_query(
             parts.append(clauses[0])
         elif clauses:
             parts.append({"$or": clauses})
+    if email == "has":
+        parts.append({"has_email": True})
+    elif email == "missing":
+        parts.append({"has_email": False})
+    if email_kind == "personal":
+        parts.append({"personal": True})
+    elif email_kind == "other":
+        parts.append({"other": True})
+    if linkedin == "has":
+        parts.append({"has_linkedin": True})
+    elif linkedin == "missing":
+        parts.append({"has_linkedin": False})
     if not parts:
         return {}
     if len(parts) == 1:
@@ -157,72 +169,31 @@ def _candidate_query(
     return {"$and": parts}
 
 
-def _needs_evidence(email: str, email_kind: str, linkedin: str) -> bool:
-    return email != "any" or email_kind != "any" or linkedin != "any"
+def _text(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
-async def _evidence_for(db, user_ids: list[int]) -> dict[int, list[dict]]:
-    grouped: dict[int, list[dict]] = {user_id: [] for user_id in user_ids}
-    if not user_ids:
-        return grouped
-    cursor = db.contact_evidence.find({"github_user_id": {"$in": user_ids}})
-    for item in await cursor.to_list(None):
-        user_id = item.get("github_user_id")
-        if isinstance(user_id, int):
-            grouped.setdefault(user_id, []).append(item)
-    return grouped
-
-
-def _present(candidate: dict, evidence: list[dict]) -> dict:
-    facts = contact_facts(candidate, evidence)
+def _present(candidate: dict) -> dict:
     kinds: list[str] = []
-    if facts["personal"]:
+    if candidate.get("personal"):
         kinds.append("personal")
-    if facts["other"]:
+    if candidate.get("other"):
         kinds.append("other")
     status = candidate.get("outreach_status") or None
     return {
         "login": candidate.get("login") or "",
         "name": candidate.get("name"),
         "profile_url": candidate.get("profile_url") or "",
-        "public_email": facts["public_email"],
+        "public_email": _text(candidate.get("public_email")),
         "email_kinds": kinds,
-        "linkedin_url": facts["linkedin_url"],
+        "linkedin_url": _text(candidate.get("linkedin_url")),
         "country": candidate.get("country"),
         "outreach_status": status,
         "last_checked_at": _iso(candidate.get("last_checked_at")),
         "job_id": candidate.get("job_id"),
     }
-
-
-async def _sorted_candidates(db, query: dict) -> list[dict]:
-    cursor = db.candidates.find(query).sort([("last_checked_at", -1), ("login", 1)])
-    return await cursor.to_list(None)
-
-
-async def _filtered_candidates(
-    db,
-    query: dict,
-    *,
-    email: str,
-    email_kind: str,
-    linkedin: str,
-) -> list[tuple[dict, list[dict]]]:
-    candidates = await _sorted_candidates(db, query)
-    user_ids = [
-        candidate["github_user_id"]
-        for candidate in candidates
-        if isinstance(candidate.get("github_user_id"), int)
-    ]
-    grouped = await _evidence_for(db, user_ids)
-    chosen: list[tuple[dict, list[dict]]] = []
-    for candidate in candidates:
-        user_id = candidate.get("github_user_id")
-        evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
-        facts = contact_facts(candidate, evidence)
-        if matches_contact_filters(facts, email=email, email_kind=email_kind, linkedin=linkedin):
-            chosen.append((candidate, evidence))
-    return chosen
 
 
 def _check_filters(email: str, email_kind: str, linkedin: str, page: int, page_size: int) -> None:
@@ -299,39 +270,22 @@ async def list_contacts(
 ) -> dict:
     _check_filters(email, email_kind, linkedin, page, page_size)
     db = request.app.state.db
-    query = _candidate_query(q=q, job_id=job_id, statuses=status, countries=country)
+    query = _candidate_query(
+        q=q,
+        job_id=job_id,
+        statuses=status,
+        countries=country,
+        email=email,
+        email_kind=email_kind,
+        linkedin=linkedin,
+    )
     skip = (page - 1) * page_size
-    if _needs_evidence(email, email_kind, linkedin):
-        matched = await _filtered_candidates(
-            db, query, email=email, email_kind=email_kind, linkedin=linkedin
-        )
-        total = len(matched)
-        page_rows = matched[skip : skip + page_size]
-        contacts = [_present(candidate, evidence) for candidate, evidence in page_rows]
-    else:
-        total = await db.candidates.count_documents(query)
-        cursor = (
-            db.candidates.find(query)
-            .sort([("last_checked_at", -1), ("login", 1)])
-            .skip(skip)
-            .limit(page_size)
-        )
-        candidates = await cursor.to_list(page_size)
-        user_ids = [
-            candidate["github_user_id"]
-            for candidate in candidates
-            if isinstance(candidate.get("github_user_id"), int)
-        ]
-        grouped = await _evidence_for(db, user_ids)
-        contacts = [
-            _present(
-                candidate,
-                grouped.get(candidate.get("github_user_id"), [])
-                if isinstance(candidate.get("github_user_id"), int)
-                else [],
-            )
-            for candidate in candidates
-        ]
+    total = await db.candidates.count_documents(query)
+    cursor = (
+        db.candidates.find(query).sort(_CANDIDATE_SORT).skip(skip).limit(page_size)
+    )
+    candidates = await cursor.to_list(page_size)
+    contacts = [_present(candidate) for candidate in candidates]
     return {"contacts": contacts, "total": total, "page": page, "page_size": page_size}
 
 
@@ -358,12 +312,21 @@ async def list_contact_logins(
 ) -> dict:
     _check_filters(email, email_kind, linkedin, 1, 25)
     db = request.app.state.db
-    query = _candidate_query(q=q, job_id=job_id, statuses=status, countries=country)
-    matched = await _filtered_candidates(
-        db, query, email=email, email_kind=email_kind, linkedin=linkedin
+    query = _candidate_query(
+        q=q,
+        job_id=job_id,
+        statuses=status,
+        countries=country,
+        email=email,
+        email_kind=email_kind,
+        linkedin=linkedin,
     )
-    logins = [candidate.get("login") or "" for candidate, _evidence in matched]
-    logins = [login for login in logins if login]
+    cursor = db.candidates.find(query, {"login": 1}).sort(_CANDIDATE_SORT)
+    logins = []
+    for candidate in await cursor.to_list(None):
+        login = _text(candidate.get("login"))
+        if login:
+            logins.append(login)
     return {"logins": logins, "total": len(logins)}
 
 
@@ -422,7 +385,7 @@ async def export_contacts(body: ContactExport, request: Request) -> StreamingRes
             for candidate in candidates
             if isinstance(candidate.get("github_user_id"), int)
         ]
-        grouped = await _evidence_for(db, user_ids)
+        grouped = await evidence_by_user(db, user_ids)
         for candidate in candidates:
             user_id = candidate.get("github_user_id")
             evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []

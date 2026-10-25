@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.campaigns import CampaignRunner
 from app.config import Settings
+from app.contacts import backfill_contact_filters
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
 from app.mail import Mailer, SmtpMailer
@@ -48,6 +49,7 @@ def create_app(
                 base_url=settings.github_api_base,
             )
             owns_github = True
+        await backfill_contact_filters(app.state.db)
         app.state.runner = runner or JobRunner(app.state.db, app.state.github)
         await app.state.runner.resume_running()
         app.state.mailer = mailer or SmtpMailer(settings)
