@@ -186,9 +186,9 @@ async def backfill_contact_filters(db) -> int:
     updated = 0
     while True:
         candidates = await (
-            db.candidates.find({"has_email": {"$exists": False}}).limit(_BACKFILL_BATCH).to_list(
-                _BACKFILL_BATCH
-            )
+            db.candidates.find({"has_email": {"$exists": False}})
+            .limit(_BACKFILL_BATCH)
+            .to_list(_BACKFILL_BATCH)
         )
         if not candidates:
             return updated

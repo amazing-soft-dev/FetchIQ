@@ -281,9 +281,7 @@ async def list_contacts(
     )
     skip = (page - 1) * page_size
     total = await db.candidates.count_documents(query)
-    cursor = (
-        db.candidates.find(query).sort(_CANDIDATE_SORT).skip(skip).limit(page_size)
-    )
+    cursor = db.candidates.find(query).sort(_CANDIDATE_SORT).skip(skip).limit(page_size)
     candidates = await cursor.to_list(page_size)
     contacts = [_present(candidate) for candidate in candidates]
     return {"contacts": contacts, "total": total, "page": page, "page_size": page_size}
