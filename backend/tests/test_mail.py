@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.mail import (
     MailFailure,
+    SmtpMailer,
     check_mailbox,
     placeholder_values,
     render_template,
@@ -216,6 +217,96 @@ def test_dropped_connection_is_retried() -> None:
     assert result["ok"] is True
     assert calls == 3
     assert waits == [0.5, 1.0]
+
+
+class _SessionSmtp:
+    def __init__(self, fail_on_send: int | None = None) -> None:
+        self.fail_on_send = fail_on_send
+        self.messages: list = []
+        self.sends = 0
+        self.closed = False
+
+    def login(self, username: str, password: str) -> None:
+        return None
+
+    def send_message(self, message) -> None:
+        self.sends += 1
+        if self.fail_on_send is not None and self.sends == self.fail_on_send:
+            raise smtplib.SMTPServerDisconnected("bye")
+        self.messages.append(message)
+
+    def quit(self) -> None:
+        self.closed = True
+
+
+class _SessionImap:
+    def __init__(self) -> None:
+        self.lists = 0
+        self.appended: list = []
+
+    def login(self, username: str, password: str) -> None:
+        return None
+
+    def list(self):
+        self.lists += 1
+        return "OK", [b'(\\HasNoChildren \\Sent) "." "INBOX.Sent"']
+
+    def append(self, mailbox, flags, date_time, message):
+        self.appended.append(mailbox)
+        return "OK", [b"ok"]
+
+    def logout(self):
+        return "BYE", [b""]
+
+
+def test_smtp_session_is_reused_and_sent_folder_is_resolved_once() -> None:
+    smtp_opens: list[_SessionSmtp] = []
+    imap_opens: list[_SessionImap] = []
+
+    def connect(settings):
+        client = _SessionSmtp()
+        smtp_opens.append(client)
+        return client
+
+    def imap_connect(settings):
+        client = _SessionImap()
+        imap_opens.append(client)
+        return client
+
+    mailer = SmtpMailer(_settings(), connect=connect, imap_connect=imap_connect)
+    assert mailer.send(recipient="a@example.com", subject="Hi", body="One") is None
+    assert mailer.send(recipient="b@example.com", subject="Hi", body="Two") is None
+    assert len(smtp_opens) == 1
+    assert len(imap_opens) == 1
+    assert len(smtp_opens[0].messages) == 2
+    assert imap_opens[0].lists == 1
+    assert imap_opens[0].appended == ["INBOX.Sent", "INBOX.Sent"]
+
+
+def test_dropped_smtp_session_reconnects_once() -> None:
+    smtp_opens: list[_SessionSmtp] = []
+    imap_opens: list[_SessionImap] = []
+
+    def connect(settings):
+        fail_on_send = 2 if not smtp_opens else None
+        client = _SessionSmtp(fail_on_send=fail_on_send)
+        smtp_opens.append(client)
+        return client
+
+    def imap_connect(settings):
+        client = _SessionImap()
+        imap_opens.append(client)
+        return client
+
+    mailer = SmtpMailer(_settings(), connect=connect, imap_connect=imap_connect)
+    assert mailer.send(recipient="a@example.com", subject="Hi", body="One") is None
+    assert mailer.send(recipient="b@example.com", subject="Hi", body="Two") is None
+    assert len(smtp_opens) == 2
+    assert smtp_opens[0].closed is True
+    assert len(smtp_opens[0].messages) == 1
+    assert len(smtp_opens[1].messages) == 1
+    assert len(imap_opens) == 1
+    assert imap_opens[0].lists == 1
 
 
 async def test_mail_check_endpoint_reports_missing_configuration(db) -> None:

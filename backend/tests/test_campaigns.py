@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
 
-from app.campaigns import INTERRUPTED, CampaignRunner
+from app.campaigns import INTERRUPTED, WAIT_STEP_SECONDS, CampaignRunner
 from app.config import Settings
 from app.mail import MailFailure
 from app.main import create_app
@@ -176,7 +176,7 @@ async def test_authentication_failure_stops_before_the_next_recipient(db) -> Non
     assert grace["status"] == "queued"
 
 
-async def test_connection_failure_pauses_and_resume_sends(db) -> None:
+async def test_connection_failure_waits_and_continues(db) -> None:
     await db.candidates.insert_many(
         [
             _candidate("ada", "ada@example.com", github_user_id=7),
@@ -184,30 +184,26 @@ async def test_connection_failure_pauses_and_resume_sends(db) -> None:
         ]
     )
     mailer = FakeMailer(connection_failures=1)
-    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    clock = Clock()
+    runner = CampaignRunner(db, mailer, sleeper=clock.sleep, clock=clock.now)
+    app = create_app(
+        settings=Settings(database_name="fetchiq_test"),
+        db=db,
+        mailer=mailer,
+        campaigns=runner,
+    )
     async with _http(app) as client:
         created = await client.post(
             "/api/campaigns",
             json=_payload(logins=["ada", "grace"]),
         )
         assert created.status_code == 201
-        campaign_id = created.json()["id"]
-        await _drain(app, campaign_id)
-        paused = await client.get(f"/api/campaigns/{campaign_id}")
-        assert paused.json()["status"] == "paused"
-        assert paused.json()["error"] == "Could not connect to the mail server. (timed out)"
-        assert mailer.sent == []
-        ada = await db.campaign_recipients.find_one({"login": "ada"})
-        grace = await db.campaign_recipients.find_one({"login": "grace"})
-        assert ada["status"] == "queued"
-        assert ada["error"] is None
-        assert grace["status"] == "queued"
-        resumed = await client.post(f"/api/campaigns/{campaign_id}/resume")
-        assert resumed.status_code == 200
-        await _drain(app, campaign_id)
-        finished = await client.get(f"/api/campaigns/{campaign_id}")
+        await _drain(app, created.json()["id"])
+        finished = await client.get(f"/api/campaigns/{created.json()['id']}")
     assert finished.json()["status"] == "succeeded"
+    assert finished.json()["error"] is None
     assert mailer.sent == ["ada@example.com", "grace@example.com"]
+    assert clock.sleeps == [WAIT_STEP_SECONDS] * 24
 
 
 async def test_startup_requeues_a_dropped_connection(db) -> None:

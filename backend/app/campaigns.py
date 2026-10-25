@@ -22,6 +22,7 @@ from app.mail import (
 
 ACTIVE = frozenset({"queued", "running", "paused"})
 WAIT_STEP_SECONDS = 5.0
+CONNECTION_BACKOFF = (120, 300, 600, 900)
 INTERRUPTED = "Send was interrupted and was not retried."
 
 
@@ -63,6 +64,7 @@ class CampaignRunner:
         self.clock = clock or utcnow
         self.rng = rng or random.random
         self._tasks: dict[str, asyncio.Task] = {}
+        self._connection_waits: dict[str, int] = {}
 
     async def kick(self, campaign_id: str) -> None:
         campaign = await self.db.campaigns.find_one({"_id": campaign_id})
@@ -227,8 +229,13 @@ class CampaignRunner:
             detail = str(exc)[:300]
             if exc.connection:
                 await self._mark(recipient["_id"], "queued", None)
-                await self._finish(campaign_id, "paused", detail)
-                return True
+                await self.db.campaigns.update_one(
+                    {"_id": campaign_id},
+                    {"$set": {"error": detail, "updated_at": self.clock()}},
+                )
+                if not await self._wait_for_connection(campaign_id):
+                    return True
+                return False
             await self._mark(recipient["_id"], "failed", detail)
             if exc.stop:
                 await self._finish(campaign_id, "failed", detail)
@@ -251,7 +258,31 @@ class CampaignRunner:
             {"login": login},
             {"$set": {"outreach_status": "message_sent", "updated_at": self.clock()}},
         )
+        await self._clear_connection_wait(campaign_id, campaign.get("error"))
         return False
+
+    async def _wait_for_connection(self, campaign_id: str) -> bool:
+        """Wait out a dropped mailbox connection. Return False when the run stops."""
+
+        index = self._connection_waits.get(campaign_id, 0)
+        seconds = CONNECTION_BACKOFF[min(index, len(CONNECTION_BACKOFF) - 1)]
+        self._connection_waits[campaign_id] = index + 1
+        remaining = float(seconds)
+        while remaining > 0:
+            if await self._stopped(campaign_id):
+                return False
+            step = min(WAIT_STEP_SECONDS, remaining)
+            await self.sleeper(step)
+            remaining -= step
+        return True
+
+    async def _clear_connection_wait(self, campaign_id: str, error: object) -> None:
+        self._connection_waits.pop(campaign_id, None)
+        if isinstance(error, str) and error.startswith(CONNECTION_ERROR):
+            await self.db.campaigns.update_one(
+                {"_id": campaign_id},
+                {"$set": {"error": None, "updated_at": self.clock()}},
+            )
 
     async def _mark(
         self,
