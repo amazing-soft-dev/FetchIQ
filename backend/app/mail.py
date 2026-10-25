@@ -3,6 +3,7 @@
 import imaplib
 import re
 import smtplib
+import threading
 import time
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -35,8 +36,8 @@ class UnknownPlaceholder(ValueError):
 class MailFailure(Exception):
     """One delivery failed. ``stop`` ends the whole campaign.
 
-    ``connection`` means the message was not accepted. The campaign pauses and
-    that recipient stays queued.
+    ``connection`` means the message was not accepted. The campaign keeps
+    running, leaves that recipient queued, and waits before trying again.
     """
 
     def __init__(self, message: str, *, stop: bool, connection: bool = False) -> None:
@@ -364,8 +365,16 @@ def check_mailbox(settings: Settings, *, connect=None, imap_connect=None, sleepe
 
 
 class SmtpMailer:
-    def __init__(self, settings: Settings) -> None:
+    """One SMTP session and one IMAP session, shared by every send."""
+
+    def __init__(self, settings: Settings, *, connect=None, imap_connect=None) -> None:
         self.settings = settings
+        self._connect = connect or _connect
+        self._imap_connect = imap_connect or _imap_connect
+        self._lock = threading.Lock()
+        self._smtp = None
+        self._imap = None
+        self._sent_folder: str | None = None
 
     def configured(self) -> bool:
         return mail_configured(self.settings)
@@ -374,7 +383,16 @@ class SmtpMailer:
         return check_mailbox(self.settings)
 
     def send(self, *, recipient: str, subject: str, body: str) -> str | None:
-        return send_message(self.settings, recipient=recipient, subject=subject, body=body)
+        if not mail_configured(self.settings):
+            raise MailFailure("Mail is not configured.", stop=True)
+        message = _message(self.settings, recipient=recipient, subject=subject, body=body)
+        with self._lock:
+            self._send_smtp(message)
+            try:
+                self._append_copy(message)
+            except CopyFailure as exc:
+                return str(exc)[:300]
+        return None
 
     def save_copy(
         self,
@@ -384,10 +402,138 @@ class SmtpMailer:
         body: str,
         sent_at: datetime | None,
     ) -> None:
-        save_copy(
+        if not mail_configured(self.settings):
+            raise CopyFailure("Mail is not configured.")
+        message = _message(
             self.settings,
             recipient=recipient,
             subject=subject,
             body=body,
             sent_at=sent_at,
         )
+        with self._lock:
+            self._append_copy(message, sent_at)
+
+    def _send_smtp(self, message: EmailMessage) -> None:
+        for attempt in range(2):
+            try:
+                self._deliver(message)
+                return
+            except MailFailure:
+                raise
+            except _CONNECT_ERRORS as exc:
+                self._close_smtp()
+                if attempt == 1:
+                    cause = _connection_cause(exc)
+                    raise MailFailure(
+                        f"{CONNECTION_ERROR} ({cause})",
+                        stop=True,
+                        connection=True,
+                    ) from exc
+
+    def _deliver(self, message: EmailMessage) -> None:
+        client = self._smtp_client()
+        try:
+            client.send_message(message)
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise MailFailure("The mail server refused this recipient.", stop=False) from exc
+        except smtplib.SMTPSenderRefused as exc:
+            raise MailFailure("The mail server refused the sender address.", stop=True) from exc
+        except smtplib.SMTPException as exc:
+            if isinstance(exc, _CONNECT_ERRORS):
+                raise
+            detail = str(exc)[:300] or "The mail server rejected this message."
+            raise MailFailure(detail, stop=False) from exc
+
+    def _smtp_client(self):
+        if self._smtp is not None:
+            return self._smtp
+        try:
+            client = self._connect(self.settings)
+        except _CONNECT_ERRORS:
+            raise
+        try:
+            client.login(self.settings.smtp_username, self.settings.smtp_password)
+        except smtplib.SMTPAuthenticationError as exc:
+            _close_client(client)
+            raise MailFailure("The mail server refused the mailbox login.", stop=True) from exc
+        except _CONNECT_ERRORS:
+            _close_client(client)
+            raise
+        self._smtp = client
+        return client
+
+    def _close_smtp(self) -> None:
+        client = self._smtp
+        self._smtp = None
+        _close_client(client)
+
+    def _append_copy(self, message: EmailMessage, sent_at: datetime | None = None) -> None:
+        raw = message.as_bytes()
+        internaldate = _internaldate(sent_at or datetime.now(UTC))
+        for attempt in range(2):
+            try:
+                client = self._imap_client()
+                folder = self._sent_folder_name(client)
+                status, _ = client.append(folder, "\\Seen", internaldate, raw)
+                if status != "OK":
+                    raise CopyFailure("Could not save the message in Sent.")
+                return
+            except CopyFailure:
+                raise
+            except (imaplib.IMAP4.abort, TimeoutError, OSError) as exc:
+                self._close_imap()
+                if attempt == 1:
+                    raise CopyFailure(f"{CONNECTION_ERROR} ({_connection_cause(exc)})") from exc
+            except imaplib.IMAP4.error as exc:
+                raise CopyFailure("Could not save the message in Sent.") from exc
+
+    def _sent_folder_name(self, client) -> str:
+        if self._sent_folder is not None:
+            return self._sent_folder
+        try:
+            typ, data = client.list()
+        except (imaplib.IMAP4.abort, TimeoutError, OSError):
+            raise
+        except imaplib.IMAP4.error as exc:
+            raise CopyFailure("Could not read the mailbox folders.") from exc
+        if typ != "OK":
+            raise CopyFailure("Could not read the mailbox folders.")
+        self._sent_folder = _sent_folder(data)
+        return self._sent_folder
+
+    def _imap_client(self):
+        if self._imap is not None:
+            return self._imap
+        try:
+            client = self._imap_connect(self.settings)
+        except (TimeoutError, OSError):
+            raise
+        try:
+            client.login(self.settings.smtp_username, self.settings.smtp_password)
+        except imaplib.IMAP4.error as exc:
+            _close_client(client, "logout")
+            raise CopyFailure("The mail server refused the mailbox login.") from exc
+        except (TimeoutError, OSError):
+            _close_client(client, "logout")
+            raise
+        self._imap = client
+        return client
+
+    def _close_imap(self) -> None:
+        client = self._imap
+        self._imap = None
+        self._sent_folder = None
+        _close_client(client, "logout")
+
+
+def _close_client(client, method: str = "quit") -> None:
+    if client is None:
+        return
+    closer = getattr(client, method, None) or getattr(client, "close", None)
+    if closer is None:
+        return
+    try:
+        closer()
+    except (smtplib.SMTPException, imaplib.IMAP4.error, OSError, TimeoutError):
+        pass
