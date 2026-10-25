@@ -7,7 +7,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.contacts import NOT_SET, PAGE_SIZES, evidence_by_user, status_slug
+from app.contacts import (
+    NOT_SET,
+    PAGE_SIZES,
+    candidate_user_ids,
+    evidence_by_user,
+    evidence_for,
+    status_slug,
+)
 from app.db import utcnow
 from app.export import COLUMNS, build_row, format_csv_row
 
@@ -87,6 +94,28 @@ async def _label_taken(db, label: str, *, ignore_id: str | None = None) -> bool:
 _CANDIDATE_SORT = [("last_checked_at", -1), ("login", 1)]
 
 
+def _in_or_missing(field: str, selected: list[str]) -> dict | None:
+    clauses: list[dict] = []
+    values = [item for item in selected if item and item != NOT_SET]
+    if values:
+        clauses.append({field: {"$in": values}})
+    if NOT_SET in selected:
+        clauses.append(
+            {
+                "$or": [
+                    {field: None},
+                    {field: ""},
+                    {field: {"$exists": False}},
+                ]
+            }
+        )
+    if len(clauses) == 1:
+        return clauses[0]
+    if clauses:
+        return {"$or": clauses}
+    return None
+
+
 def _candidate_query(
     *,
     q: str,
@@ -112,44 +141,10 @@ def _candidate_query(
                 ]
             }
         )
-    if statuses:
-        clauses: list[dict] = []
-        ids = [item for item in statuses if item != NOT_SET]
-        if ids:
-            clauses.append({"outreach_status": {"$in": ids}})
-        if NOT_SET in statuses:
-            clauses.append(
-                {
-                    "$or": [
-                        {"outreach_status": None},
-                        {"outreach_status": ""},
-                        {"outreach_status": {"$exists": False}},
-                    ]
-                }
-            )
-        if len(clauses) == 1:
-            parts.append(clauses[0])
-        elif clauses:
-            parts.append({"$or": clauses})
-    if countries:
-        clauses = []
-        names = [item for item in countries if item and item != NOT_SET]
-        if names:
-            clauses.append({"country": {"$in": names}})
-        if NOT_SET in countries:
-            clauses.append(
-                {
-                    "$or": [
-                        {"country": None},
-                        {"country": ""},
-                        {"country": {"$exists": False}},
-                    ]
-                }
-            )
-        if len(clauses) == 1:
-            parts.append(clauses[0])
-        elif clauses:
-            parts.append({"$or": clauses})
+    for field, selected in (("outreach_status", statuses), ("country", countries)):
+        clause = _in_or_missing(field, selected)
+        if clause is not None:
+            parts.append(clause)
     if email == "has":
         parts.append({"has_email": True})
     elif email == "missing":
@@ -374,20 +369,11 @@ async def export_contacts(body: ContactExport, request: Request) -> StreamingRes
 
     async def lines():
         yield format_csv_row(COLUMNS)
-        cursor = db.candidates.find({"login": {"$in": body.logins}}).sort(
-            [("last_checked_at", -1), ("login", 1)]
-        )
+        cursor = db.candidates.find({"login": {"$in": body.logins}}).sort(_CANDIDATE_SORT)
         candidates = await cursor.to_list(None)
-        user_ids = [
-            candidate["github_user_id"]
-            for candidate in candidates
-            if isinstance(candidate.get("github_user_id"), int)
-        ]
-        grouped = await evidence_by_user(db, user_ids)
+        grouped = await evidence_by_user(db, candidate_user_ids(candidates))
         for candidate in candidates:
-            user_id = candidate.get("github_user_id")
-            evidence = grouped.get(user_id, []) if isinstance(user_id, int) else []
-            row = build_row(candidate, evidence, status_labels=labels)
+            row = build_row(candidate, evidence_for(grouped, candidate), status_labels=labels)
             yield format_csv_row([row[column] for column in COLUMNS])
 
     return StreamingResponse(
