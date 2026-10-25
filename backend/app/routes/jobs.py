@@ -1,12 +1,10 @@
 """Job control routes."""
 
-from datetime import date, datetime
-
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.db import utcnow
+from app.db import isoformat, utcnow
 from app.discovery import new_job_document
 from app.export import stream_job_csv
 from app.models import SearchCriteria
@@ -18,18 +16,12 @@ class JobCreate(BaseModel):
     criteria: SearchCriteria
 
 
-def _iso(value) -> str | None:
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    return None
-
-
 def _budget(document: dict | None) -> dict:
     budget = document or {}
     return {
         "limit": budget.get("limit"),
         "remaining": budget.get("remaining"),
-        "reset_at": _iso(budget.get("reset_at")),
+        "reset_at": isoformat(budget.get("reset_at")),
         "retry_after_seconds": budget.get("retry_after_seconds"),
     }
 
@@ -112,8 +104,8 @@ def public_job(
         },
         "request_budget": _budget(document.get("request_budget")),
         "error": document.get("error"),
-        "created_at": _iso(document.get("created_at")),
-        "updated_at": _iso(document.get("updated_at")),
+        "created_at": isoformat(document.get("created_at")),
+        "updated_at": isoformat(document.get("updated_at")),
     }
 
 
@@ -145,7 +137,7 @@ async def list_jobs(request: Request) -> dict:
             {
                 "id": document["_id"],
                 "status": document.get("status"),
-                "created_at": _iso(document.get("created_at")),
+                "created_at": isoformat(document.get("created_at")),
             }
             for document in documents
         ]

@@ -77,6 +77,13 @@ jobs:
           if [ -n "$closes" ]; then
             body="$body
 
-$closes"
+            $closes"
           fi
-          gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "$body"
+          if ! created="$(gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "$body" 2>&1)"; then
+            case "$created" in
+              *"already exists"*) echo "$created"; exit 0 ;;
+            esac
+            echo "$created" >&2
+            exit 1
+          fi
+          echo "$created"

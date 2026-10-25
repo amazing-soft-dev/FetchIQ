@@ -1,7 +1,6 @@
 """Review stored contacts, their outreach status, and a filtered CSV."""
 
 import re
-from datetime import date, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -15,7 +14,7 @@ from app.contacts import (
     evidence_for,
     status_slug,
 )
-from app.db import utcnow
+from app.db import isoformat, utcnow
 from app.export import COLUMNS, build_row, format_csv_row
 
 router = APIRouter(prefix="/api")
@@ -46,12 +45,6 @@ class BulkStatus(BaseModel):
 
 class ContactExport(BaseModel):
     logins: list[str] = Field(min_length=1, max_length=10000)
-
-
-def _iso(value) -> str | None:
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    return None
 
 
 def _clean_label(label: str) -> str:
@@ -186,7 +179,7 @@ def _present(candidate: dict) -> dict:
         "linkedin_url": _text(candidate.get("linkedin_url")),
         "country": candidate.get("country"),
         "outreach_status": status,
-        "last_checked_at": _iso(candidate.get("last_checked_at")),
+        "last_checked_at": isoformat(candidate.get("last_checked_at")),
         "job_id": candidate.get("job_id"),
     }
 
