@@ -65,20 +65,40 @@ jobs:
               ;;
           esac
 
-          existing="$(gh pr list --repo "$repo" --base "$base" --head "$owner:$head" --state open --json number --jq length)"
-          if [ "$existing" != "0" ]; then
-            echo "Pull request already open."
+          issue_numbers() {
+            tr -d '\r' \
+              | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+' \
+              | grep -oE '[0-9]+$' || true
+          }
+
+          range="origin/$base..origin/$head"
+          numbers="$(git log "$range" --format=%B | issue_numbers)"
+          if [ "$base" = "main" ]; then
+            merged="$(git log "$range" --format=%s | grep -oE '(Merge pull request #|\(#)[0-9]+' | grep -oE '[0-9]+$' || true)"
+            for pr in $merged; do
+              pr_body="$(gh pr view "$pr" --repo "$repo" --json body --jq '.body // ""' | issue_numbers)"
+              pr_linked="$(gh pr view "$pr" --repo "$repo" --json closingIssuesReferences --jq '.closingIssuesReferences[].number')"
+              numbers="$numbers"$'\n'"$pr_body"$'\n'"$pr_linked"
+            done
+          fi
+
+          body="Opened automatically from \`$head\`."
+          for number in $(echo "$numbers" | grep -E '^[0-9]+$' | sort -nu || true); do
+            body="$body"$'\n'"Closes #$number"
+          done
+
+          existing="$(gh pr list --repo "$repo" --base "$base" --head "$owner:$head" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            if [ "$base" = "main" ]; then
+              gh pr edit "$existing" --repo "$repo" --body "$body"
+              echo "Updated pull request #$existing."
+            else
+              echo "Pull request already open."
+            fi
             exit 0
           fi
 
           title="$(git log -1 --format=%s "origin/$head")"
-          closes="$(git log "origin/$base..origin/$head" --format=%B | grep -E '^(Closes|Fixes|Resolves) #[0-9]+$' || true)"
-          body="Opened automatically from \`$head\`."
-          if [ -n "$closes" ]; then
-            body="$body
-
-            $closes"
-          fi
           if ! created="$(gh pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body "$body" 2>&1)"; then
             case "$created" in
               *"already exists"*) echo "$created"; exit 0 ;;

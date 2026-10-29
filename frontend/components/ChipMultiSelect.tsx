@@ -12,7 +12,9 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
-import { controlClass } from "./ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+
+const MAX_VISIBLE_CHIPS = 2;
 
 type ChipMultiSelectProps = {
   label: string;
@@ -188,6 +190,8 @@ export function ChipMultiSelect({
     inputRef.current?.focus();
   }
 
+  const visibleChips = value.slice(0, MAX_VISIBLE_CHIPS);
+  const hiddenChips = value.slice(MAX_VISIBLE_CHIPS);
   const describedBy = [helperId, countId].filter(Boolean).join(" ");
 
   return (
@@ -211,32 +215,64 @@ export function ChipMultiSelect({
       ) : null}
 
       <div className="relative min-w-0">
-        <div className="flex flex-col gap-1" onPointerDown={onBoxPointerDown}>
-          {value.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {value.map((item) => (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full border border-line bg-header px-2 py-0.5 text-xs text-ink"
-                  key={item}
+        <div
+          className="flex h-[34px] w-full items-center gap-1 rounded-control border border-line bg-white px-2 text-sm text-ink transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20"
+          onPointerDown={onBoxPointerDown}
+        >
+          {visibleChips.map((item) => (
+            <span
+              className="inline-flex min-w-0 shrink items-center gap-1 rounded-full border border-line bg-header px-2 py-0.5 text-xs text-ink"
+              key={item}
+            >
+              <span className="max-w-24 truncate">{item}</span>
+              <button
+                type="button"
+                className="text-muted hover:text-ink"
+                aria-label={`Remove ${item}`}
+                onClick={() => remove(item)}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </span>
+          ))}
+          {hiddenChips.length > 0 ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full border border-line bg-header px-2 py-0.5 text-xs text-ink hover:bg-hover"
+                  aria-label={`Show ${hiddenChips.length} more selected ${countNoun}s`}
                 >
-                  {item}
-                  <button
-                    type="button"
-                    className="text-muted hover:text-ink"
-                    aria-label={`Remove ${item}`}
-                    onClick={() => remove(item)}
-                  >
-                    <span aria-hidden="true">×</span>
-                  </button>
-                </span>
-              ))}
-            </div>
+                  +{hiddenChips.length}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="max-h-56 w-60 overflow-auto">
+                <ul aria-label={`Selected ${countNoun}s`}>
+                  {value.map((item) => (
+                    <li
+                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm text-ink hover:bg-hover"
+                      key={item}
+                    >
+                      <span className="min-w-0 truncate">{item}</span>
+                      <button
+                        type="button"
+                        className="text-muted hover:text-ink"
+                        aria-label={`Remove ${item}`}
+                        onClick={() => remove(item)}
+                      >
+                        <span aria-hidden="true">×</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </PopoverContent>
+            </Popover>
           ) : null}
 
           <input
             id={inputId}
             ref={inputRef}
-            className={controlClass}
+            className="h-full min-w-12 flex-1 bg-transparent px-1 text-sm font-normal outline-none placeholder:text-subtle"
             type="text"
             role="combobox"
             aria-expanded={open}
@@ -248,7 +284,7 @@ export function ChipMultiSelect({
             aria-describedby={describedBy}
             autoComplete="off"
             spellCheck={false}
-            placeholder={placeholder}
+            placeholder={value.length === 0 ? placeholder : ""}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);

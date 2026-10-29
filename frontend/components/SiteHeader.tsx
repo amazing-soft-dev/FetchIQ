@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { Search, Users } from "lucide-react";
 
 import { cn } from "../lib/utils";
+import { SearchStatusLink } from "./SearchStatusLink";
 
 const links = [
   { href: "/", label: "Search", icon: Search },
@@ -22,6 +23,7 @@ export function SiteHeader() {
         FetchIQ
       </Link>
       <nav className="flex items-center gap-1">
+        <SearchStatusLink />
         {links.map((link) => {
           const active = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
           const Icon = link.icon;
