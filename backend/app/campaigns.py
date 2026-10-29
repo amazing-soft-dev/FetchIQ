@@ -12,6 +12,7 @@ from app.contacts import candidate_user_ids, contact_facts, evidence_by_user, ev
 from app.db import utcnow
 from app.mail import (
     CONNECTION_ERROR,
+    DEFERRED_ERROR,
     SENDER_ERROR,
     CopyFailure,
     Mailer,
@@ -279,8 +280,8 @@ class CampaignRunner:
 
     async def _clear_connection_wait(self, campaign_id: str, error: object) -> None:
         self._connection_waits.pop(campaign_id, None)
-        if isinstance(error, str) and (
-            error.startswith(CONNECTION_ERROR) or error.startswith(SENDER_ERROR)
+        if isinstance(error, str) and error.startswith(
+            (CONNECTION_ERROR, SENDER_ERROR, DEFERRED_ERROR)
         ):
             await self.db.campaigns.update_one(
                 {"_id": campaign_id},

@@ -3,6 +3,7 @@
 import imaplib
 import re
 import smtplib
+import ssl
 import threading
 import time
 from datetime import UTC, datetime
@@ -15,15 +16,15 @@ from app.config import Settings
 ALLOWED_PLACEHOLDERS = frozenset({"first_name", "name", "login", "email"})
 CONNECTION_ERROR = "Could not connect to the mail server."
 SENDER_ERROR = "The mail server refused the sender address."
+DEFERRED_ERROR = "The mail server deferred this message."
+REJECTED_ERROR = "The mail server rejected this message."
 _TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 _CONNECT_ATTEMPTS = 3
 _CONNECT_BACKOFF = (0.5, 1.0)
-_CONNECT_ERRORS = (
+_DROPPED_SESSION = (
     smtplib.SMTPConnectError,
     smtplib.SMTPServerDisconnected,
     smtplib.SMTPHeloError,
-    TimeoutError,
-    OSError,
 )
 
 
@@ -122,11 +123,27 @@ def _connect(settings: Settings):
     return client
 
 
+def _is_connection_error(exc: BaseException) -> bool:
+    """True when the session or socket failed, not when the server replied with an error.
+
+    ``smtplib.SMTPException`` subclasses ``OSError``, so a bare ``except OSError``
+    also catches every SMTP reply error, such as a rate limit on DATA.
+    """
+
+    if isinstance(exc, _DROPPED_SESSION):
+        return True
+    return isinstance(exc, OSError) and not isinstance(exc, smtplib.SMTPException)
+
+
 def _connection_cause(exc: BaseException) -> str:
     if isinstance(exc, TimeoutError):
         return "timed out"
     if isinstance(exc, ConnectionRefusedError):
         return "connection refused"
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return "the server closed the connection"
+    if isinstance(exc, ssl.SSLError):
+        return "the TLS handshake failed"
     if isinstance(exc, (smtplib.SMTPServerDisconnected, smtplib.SMTPHeloError)):
         return "the server closed the connection"
     if isinstance(exc, smtplib.SMTPConnectError):
@@ -138,17 +155,41 @@ def _connection_cause(exc: BaseException) -> str:
         return "timed out"
     if "refused" in text:
         return "connection refused"
-    return "could not reach the server"
+    return f"could not reach the server, {type(exc).__name__}"
 
 
-def _sender_failure(exc: smtplib.SMTPSenderRefused) -> MailFailure:
-    text = exc.smtp_error
+def _server_reply(exc: smtplib.SMTPException) -> tuple[int | None, str]:
+    code = getattr(exc, "smtp_code", None)
+    text = getattr(exc, "smtp_error", None)
     if isinstance(text, bytes):
         text = text.decode("utf-8", "replace")
     reply = " ".join(str(text or "").split())
+    if not reply and not code:
+        reply = " ".join(str(exc).split())
+    return (code if isinstance(code, int) else None), reply
+
+
+def _sender_failure(exc: smtplib.SMTPSenderRefused) -> MailFailure:
+    _, reply = _server_reply(exc)
     shown = f"{exc.smtp_code} {reply}".strip()
     detail = f"{SENDER_ERROR} ({shown})" if shown else SENDER_ERROR
     return MailFailure(detail[:300], stop=False, connection=True)
+
+
+def _rejection(exc: smtplib.SMTPException) -> MailFailure:
+    """The server answered and said no. Keep its reply instead of calling it a dropped connection.
+
+    A 4xx reply is temporary: the recipient stays queued and is tried again later.
+    A 5xx reply is final for this recipient only.
+    """
+
+    code, reply = _server_reply(exc)
+    shown = f"{code} {reply}".strip() if code else reply
+    if code is not None and 400 <= code < 500:
+        detail = f"{DEFERRED_ERROR} ({shown})" if shown else DEFERRED_ERROR
+        return MailFailure(detail[:300], stop=False, connection=True)
+    detail = f"{REJECTED_ERROR} ({shown})" if shown else REJECTED_ERROR
+    return MailFailure(detail[:300], stop=False)
 
 
 def _with_mailbox(settings: Settings, connect, action, sleeper=None) -> None:
@@ -166,15 +207,14 @@ def _with_mailbox(settings: Settings, connect, action, sleeper=None) -> None:
             raise MailFailure("The mail server refused this recipient.", stop=False) from exc
         except smtplib.SMTPSenderRefused as exc:
             raise _sender_failure(exc) from exc
-        except _CONNECT_ERRORS as exc:
+        except OSError as exc:
+            if not _is_connection_error(exc):
+                raise _rejection(exc) from exc
             if attempt + 1 < _CONNECT_ATTEMPTS:
                 pause(_CONNECT_BACKOFF[attempt])
                 continue
             cause = _connection_cause(exc)
             raise MailFailure(f"{CONNECTION_ERROR} ({cause})", stop=True, connection=True) from exc
-        except smtplib.SMTPException as exc:
-            detail = str(exc)[:300] or "The mail server rejected this message."
-            raise MailFailure(detail, stop=False) from exc
 
 
 _SENT_FALLBACK = ("INBOX.Sent", "Sent", "Sent Items")
@@ -431,13 +471,15 @@ class SmtpMailer:
                 self._deliver(message)
                 return
             except MailFailure as exc:
-                if not str(exc).startswith(SENDER_ERROR):
+                if not exc.connection:
                     raise
                 self._close_smtp()
                 if attempt == 1:
                     raise
-            except _CONNECT_ERRORS as exc:
+            except OSError as exc:
                 self._close_smtp()
+                if not _is_connection_error(exc):
+                    raise _rejection(exc) from exc
                 if attempt == 1:
                     cause = _connection_cause(exc)
                     raise MailFailure(
@@ -455,24 +497,20 @@ class SmtpMailer:
         except smtplib.SMTPSenderRefused as exc:
             raise _sender_failure(exc) from exc
         except smtplib.SMTPException as exc:
-            if isinstance(exc, _CONNECT_ERRORS):
+            if _is_connection_error(exc):
                 raise
-            detail = str(exc)[:300] or "The mail server rejected this message."
-            raise MailFailure(detail, stop=False) from exc
+            raise _rejection(exc) from exc
 
     def _smtp_client(self):
         if self._smtp is not None:
             return self._smtp
-        try:
-            client = self._connect(self.settings)
-        except _CONNECT_ERRORS:
-            raise
+        client = self._connect(self.settings)
         try:
             client.login(self.settings.smtp_username, self.settings.smtp_password)
         except smtplib.SMTPAuthenticationError as exc:
             _close_client(client)
             raise MailFailure("The mail server refused the mailbox login.", stop=True) from exc
-        except _CONNECT_ERRORS:
+        except OSError:
             _close_client(client)
             raise
         self._smtp = client
