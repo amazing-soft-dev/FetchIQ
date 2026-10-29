@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Search, Users } from "lucide-react";
@@ -16,7 +17,8 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-30 flex h-12 items-center justify-between border-b border-line bg-header px-4">
-      <Link href="/" className="text-sm font-semibold tracking-tight text-ink">
+      <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight text-ink">
+        <Image src="/brand/logo-mark/logo-mark-192.png" alt="" width={24} height={24} priority />
         FetchIQ
       </Link>
       <nav className="flex items-center gap-1">
