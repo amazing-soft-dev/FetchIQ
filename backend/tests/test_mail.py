@@ -205,6 +205,8 @@ def test_refused_login_is_not_connected() -> None:
         (TimeoutError("timed out"), "timed out"),
         (ConnectionRefusedError("no"), "connection refused"),
         (smtplib.SMTPServerDisconnected("bye"), "the server closed the connection"),
+        (ConnectionResetError("reset"), "the server closed the connection"),
+        (OSError("odd"), "could not reach the server, OSError"),
     ],
 )
 def test_connection_failure_reports_the_cause(error: Exception, cause: str) -> None:
@@ -243,9 +245,11 @@ class _SessionSmtp:
         self,
         fail_on_send: int | None = None,
         sender_refusal: tuple[int, bytes] | None = None,
+        send_error: Exception | None = None,
     ) -> None:
         self.fail_on_send = fail_on_send
         self.sender_refusal = sender_refusal
+        self.send_error = send_error
         self.messages: list = []
         self.sends = 0
         self.closed = False
@@ -258,6 +262,8 @@ class _SessionSmtp:
         if self.sender_refusal is not None:
             code, text = self.sender_refusal
             raise smtplib.SMTPSenderRefused(code, text, "ada@example.com")
+        if self.send_error is not None:
+            raise self.send_error
         if self.fail_on_send is not None and self.sends == self.fail_on_send:
             raise smtplib.SMTPServerDisconnected("bye")
         self.messages.append(message)
@@ -348,6 +354,64 @@ def test_repeated_sender_refusal_does_not_stop(code: int) -> None:
     assert str(caught.value) == f"The mail server refused the sender address. ({code} denied)"
     assert len(smtp_opens) == 2
     assert all(client.closed for client in smtp_opens)
+
+
+def test_server_reply_error_is_not_a_connection_failure() -> None:
+    smtp_opens: list[_SessionSmtp] = []
+
+    def connect(settings):
+        client = _SessionSmtp(send_error=smtplib.SMTPDataError(550, b"5.7.1 rate limit exceeded"))
+        smtp_opens.append(client)
+        return client
+
+    mailer = SmtpMailer(_settings(), connect=connect)
+    with pytest.raises(MailFailure) as caught:
+        mailer.send(recipient="a@example.com", subject="Hi", body="One")
+    assert caught.value.stop is False
+    assert caught.value.connection is False
+    assert str(caught.value) == (
+        "The mail server rejected this message. (550 5.7.1 rate limit exceeded)"
+    )
+    assert len(smtp_opens) == 1
+
+
+def test_temporary_server_reply_keeps_the_message_queued_with_its_reply() -> None:
+    smtp_opens: list[_SessionSmtp] = []
+
+    def connect(settings):
+        client = _SessionSmtp(send_error=smtplib.SMTPDataError(451, b"4.7.1 try again later"))
+        smtp_opens.append(client)
+        return client
+
+    mailer = SmtpMailer(_settings(), connect=connect)
+    with pytest.raises(MailFailure) as caught:
+        mailer.send(recipient="a@example.com", subject="Hi", body="One")
+    assert caught.value.stop is False
+    assert caught.value.connection is True
+    assert str(caught.value) == (
+        "The mail server deferred this message. (451 4.7.1 try again later)"
+    )
+    assert len(smtp_opens) == 2
+    assert all(client.closed for client in smtp_opens)
+
+
+def test_server_reply_error_keeps_its_reply_without_a_session() -> None:
+    client = _Client(smtplib.SMTPDataError(554, b"5.7.1 blocked as spam"))
+
+    def connect(settings):
+        return client
+
+    with pytest.raises(MailFailure) as caught:
+        send_message(
+            _settings(),
+            recipient="ada@example.com",
+            subject="Hello",
+            body="Hi",
+            connect=connect,
+        )
+    assert caught.value.stop is False
+    assert caught.value.connection is False
+    assert str(caught.value) == "The mail server rejected this message. (554 5.7.1 blocked as spam)"
 
 
 def test_dropped_smtp_session_reconnects_once() -> None:
