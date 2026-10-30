@@ -8,12 +8,13 @@ The search is not an exhaustive index of GitHub. User search returns at most 1,0
 
 Only fields the developer published through the GitHub profile API or in public README content: display name, company, bio, blog, a public email when the API returns one, and social URLs written in those sources. Each stored contact keeps the source URL it came from.
 
+When the profile API, the profile page, and every README published no email, FetchIQ makes one last attempt. It takes the three oldest public repositories the user owns (forks are skipped) and reads each one's first three commits, oldest first, through the commit's `.patch` page. Only the `From:` header of the patch is read, never the diff. The search stops at the first usable address, and the stored contact keeps the commit URL as its source.
+
 These sources are never used to fill an email:
 
-- commit patch files
-- commit headers
-- `noreply` placeholders
+- `noreply` placeholders, including `<id>+<login>@users.noreply.github.com` commit authors
 - addresses assembled from a name and a domain
+- the body or diff of a commit
 
 FetchIQ authenticates to GitHub as one GitHub App installation. It signs a short-lived JWT with the app's private key, trades it for an installation token, caches that token, and renews it shortly before it expires. Rate limits are honored with `Retry-After` and exponential backoff. FetchIQ does not use a pool of tokens or export a list for resale.
 

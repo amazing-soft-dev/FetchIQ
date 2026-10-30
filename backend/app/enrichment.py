@@ -1,11 +1,12 @@
 """Enrich candidates from the profile API, the public profile page, and READMEs.
 
-Commit patches, mail headers, and noreply placeholders are never read. Name,
-location, and public email come from the user API. The profile page contributes
-the UTC offset and a published mailto when one is present. Those two reads
-run together. The profile README is read only when an email or a LinkedIn URL
-is still missing. Repository READMEs are read only when both are still missing:
-at most three recently updated repositories, stopping when an email is found.
+Name, location, and public email come from the user API. The profile page
+contributes the UTC offset and a published mailto when one is present. Those two
+reads run together. The profile README is read only when an email or a LinkedIn
+URL is still missing. Repository READMEs are read only when both are still
+missing: at most three recently updated repositories, stopping when an email is
+found. Commit patches are the last resort, read only when no email was found
+anywhere else (see ``app.commits``). Noreply placeholders are never stored.
 """
 
 import asyncio
@@ -18,6 +19,7 @@ from typing import Any
 import httpx
 from pymongo.errors import DuplicateKeyError
 
+from app.commits import find_commit_email
 from app.contacts import filter_fields, is_blank, latest_valid_email, merge_profile_fields
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
@@ -347,6 +349,19 @@ class EnrichmentService:
                 fill_missing_only=merging,
                 seen_kinds=seen_kinds,
             )
+        if not await self._has_contact(user_id, "email"):
+            found = await find_commit_email(self.github, login)
+            if found:
+                commit_email, commit_url = found
+                emails.append(commit_email)
+                await upsert_evidence(
+                    self.db,
+                    github_user_id=user_id,
+                    kind="email",
+                    normalized_value=commit_email,
+                    raw_value=commit_email,
+                    source_url=commit_url,
+                )
         location = normalize_location(profile.get("location"))
         now = utcnow()
         incoming = {

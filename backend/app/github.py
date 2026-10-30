@@ -60,6 +60,22 @@ def parse_next_link(link_header: str | None) -> str | None:
     return None
 
 
+def parse_last_page(link_header: str | None) -> int | None:
+    """Page number of ``rel="last"`` in a Link header, or None when there is no such link."""
+
+    if not link_header:
+        return None
+    for part in link_header.split(","):
+        pieces = [piece.strip() for piece in part.split(";") if piece.strip()]
+        if not pieces or not ('rel="last"' in pieces[1:] or "rel=last" in pieces[1:]):
+            continue
+        url = pieces[0].removeprefix("<").removesuffix(">")
+        page = httpx.URL(url).params.get("page")
+        if page and page.isdigit():
+            return int(page)
+    return None
+
+
 def is_rate_limited(response: httpx.Response) -> bool:
     if response.status_code == 429:
         return True
