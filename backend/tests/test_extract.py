@@ -55,3 +55,29 @@ def test_profile_blog_can_be_a_website() -> None:
         "https://example.com/notes",
     )
     assert classify_url("https://github.com/ada") is None
+
+
+def test_placeholder_emails_are_not_contacts() -> None:
+    assert normalize_email("your.email@example.com") is None
+    assert normalize_email("YourEmail@gmail.com") is None
+    assert normalize_email("your_name@example.org") is None
+    assert normalize_email("email@example.com") is None
+    assert normalize_email("name@example.net") is None
+    assert normalize_email("user@mail.example") is None
+    assert normalize_email("ada@example.com") == "ada@example.com"
+    assert normalize_email("email@gmail.com") == "email@gmail.com"
+
+
+def test_link_text_email_wins_over_placeholder_mailto_target() -> None:
+    found = extract_published_contacts(
+        "- Email: [luisdavid25torrealba@gmail.com](mailto:your.email@example.com)  "
+    )
+    assert found.emails == ["luisdavid25torrealba@gmail.com"]
+
+
+def test_placeholder_mailto_without_visible_email_yields_nothing() -> None:
+    text = (
+        '[Email me](mailto:your.email@example.com) <a href="mailto:your.email@example.com">me</a>'
+    )
+    found = extract_published_contacts(text)
+    assert found.emails == []

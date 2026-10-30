@@ -1,7 +1,8 @@
 """Narrow extractors for addresses and social URLs published in Markdown.
 
 Emails are taken only from text and mailto links. Code spans are ignored.
-Noreply placeholders are dropped, and nothing is invented from a name or domain.
+Noreply and template placeholders such as ``your.email@example.com`` are dropped, and
+nothing is invented from a name or domain.
 """
 
 import re
@@ -13,6 +14,14 @@ from markdown_it import MarkdownIt
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 URL_RE = re.compile(r"https?://[^\s<>()\]]+", re.IGNORECASE)
 NOREPLY_DOMAINS = ("users.noreply.github.com", "noreply.github.com")
+# Profile templates ship ``your.email@example.com`` and similar; nobody owns these.
+PLACEHOLDER_LOCAL_RE = re.compile(
+    r"your[._\-]?(?:e-?mail|mail|name|address|username)(?:[._\-]?address)?",
+    re.IGNORECASE,
+)
+# Generic locals are only placeholders on domains reserved for documentation (RFC 2606).
+GENERIC_PLACEHOLDER_LOCALS = {"email", "name", "user", "username", "myemail", "myname"}
+RESERVED_DOMAIN_LABELS = {"example", "test", "invalid", "localhost"}
 
 SOCIAL_HOSTS = {
     "linkedin.com": "linkedin",
@@ -38,6 +47,14 @@ def _walk(tokens):
         yield from _walk(token.children)
 
 
+def is_placeholder_email(local: str, domain: str) -> bool:
+    if PLACEHOLDER_LOCAL_RE.fullmatch(local):
+        return True
+    labels = domain.casefold().split(".")
+    reserved = labels[0] == "example" or labels[-1] in RESERVED_DOMAIN_LABELS
+    return reserved and local.casefold() in GENERIC_PLACEHOLDER_LOCALS
+
+
 def normalize_email(value: str) -> str | None:
     text = value.strip().strip("<>").split("?", 1)[0].strip()
     if not EMAIL_RE.fullmatch(text):
@@ -50,6 +67,8 @@ def normalize_email(value: str) -> str | None:
         or domain.startswith(".")
         or domain.endswith(".")
     ):
+        return None
+    if is_placeholder_email(local, domain):
         return None
     normalized = f"{local}@{domain.casefold()}"
     host = domain.casefold()
