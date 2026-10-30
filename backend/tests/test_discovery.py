@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
@@ -185,6 +185,53 @@ async def test_recent_profile_is_left_unchanged(db) -> None:
     assert stored["enrichment_status"] == "enriched"
     assert stored["name"] == "Ada"
     assert stored["outreach_status"] == "interested"
+
+
+async def _stored_profile(db, *, age_days: int, email: str | None) -> tuple[dict, dict]:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(job)
+    await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    await db.candidates.update_one(
+        {"login": "ada"},
+        {
+            "$set": {
+                "enrichment_status": "enriched",
+                "public_email": email,
+                "last_checked_at": datetime.now(UTC) - timedelta(days=age_days),
+            }
+        },
+    )
+    other = new_job_document(SearchCriteria(countries=["Germany"]))
+    await db.search_jobs.insert_one(other)
+    return job, other
+
+
+@pytest.mark.asyncio
+async def test_profile_checked_within_two_weeks_is_skipped_even_without_an_email(db) -> None:
+    job, other = await _stored_profile(db, age_days=13, email=None)
+    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["job_id"] == job["_id"]
+    assert stored["enrichment_status"] == "enriched"
+
+
+@pytest.mark.asyncio
+async def test_old_profile_with_an_email_is_skipped(db) -> None:
+    job, other = await _stored_profile(db, age_days=30, email="ada@example.com")
+    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["job_id"] == job["_id"]
+    assert stored["enrichment_status"] == "enriched"
+    assert stored["public_email"] == "ada@example.com"
+
+
+@pytest.mark.asyncio
+async def test_old_profile_without_an_email_is_searched_again(db) -> None:
+    _job, other = await _stored_profile(db, age_days=15, email=None)
+    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    stored = await db.candidates.find_one({"login": "ada"})
+    assert stored["job_id"] == other["_id"]
+    assert stored["enrichment_status"] == "merge"
 
 
 @pytest.mark.asyncio
