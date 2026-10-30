@@ -26,7 +26,7 @@ from app.locations import normalize_location
 
 MAX_REPO_READMES = 3
 MAX_README_BYTES = 100_000
-FRESHNESS = timedelta(days=7)
+FRESHNESS = timedelta(days=14)
 TWITTER_NAME = re.compile(r"[A-Za-z0-9_]{1,15}\Z")
 _HOURS_AHEAD = re.compile(
     r"""data-hours-ahead-of-utc\s*=\s*["']([+-]?\d+(?:\.\d+)?)["']""",
