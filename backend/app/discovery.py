@@ -24,7 +24,7 @@ from app.models import SearchCriteria
 SEARCH_RESULT_CAP = 1000
 PAGE_SIZE = 100
 MAX_PAGES = 10
-FRESH_PROFILE = timedelta(days=7)
+FRESH_PROFILE = timedelta(days=14)
 
 
 def quote_term(value: str) -> str:
@@ -133,8 +133,9 @@ def _checked_at(value: object) -> datetime | None:
 async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
     """Insert a username once. A later search fills gaps instead of replacing the row.
 
-    An existing username is not a new discovery. A profile checked within seven
-    days is left untouched. An older profile is queued for a merge that fills
+    An existing username is not a new discovery. A profile checked within two
+    weeks is left untouched, and so is an older profile that already has a public
+    email. Only an older profile with no email is queued for a merge that fills
     empty fields and keeps the stored GitHub user id so contact evidence stays
     attached.
     """
@@ -159,6 +160,8 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> str:
     if existing is not None:
         checked = _checked_at(existing.get("last_checked_at"))
         if checked is not None and checked >= now - FRESH_PROFILE:
+            return "already_stored"
+        if not is_blank(existing.get("public_email")):
             return "already_stored"
         changes: dict[str, Any] = {
             "job_id": job_id,
