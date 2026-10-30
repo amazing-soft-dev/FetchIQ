@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILES, extra="ignore")
 
     mongodb_uri: str = ""
-    github_token: str = ""
+    github_app_id: str = ""
+    github_app_installation_id: str = ""
+    github_app_private_key_path: str = ""
     database_name: str = "fetchiq"
     github_api_base: str = "https://api.github.com"
     smtp_host: str = "smtp.hostinger.com"
@@ -32,6 +34,17 @@ class Settings(BaseSettings):
     imap_host: str = "imap.hostinger.com"
     imap_port: int = 993
     imap_ssl: bool = True
+
+    @field_validator("github_app_private_key_path")
+    @classmethod
+    def key_path_is_relative_to_repo(cls, value: str) -> str:
+        """A relative key path means the same file whichever directory uvicorn starts in."""
+
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        path = Path(cleaned).expanduser()
+        return str(path if path.is_absolute() else _REPO_ROOT / path)
 
     @field_validator("database_name")
     @classmethod

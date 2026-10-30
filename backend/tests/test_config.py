@@ -5,7 +5,7 @@ from app.db import assert_database_allowed
 
 
 def test_default_database_is_fetchiq() -> None:
-    settings = Settings(mongodb_uri="", github_token="", database_name="fetchiq")
+    settings = Settings(mongodb_uri="", database_name="fetchiq")
     assert settings.database_name == "fetchiq"
 
 

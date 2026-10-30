@@ -11,6 +11,7 @@ from app.github import GitHubClient
 from app.main import create_app
 from app.models import AccountAge, SearchCriteria
 from app.runner import JobRunner
+from conftest import FakeAuth
 
 CREATED = re.compile(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})")
 
@@ -45,10 +46,10 @@ async def _no_sleep(_seconds: float) -> None:
 
 
 def _stack(db, handler, sleeper=_no_sleep):
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     runner = JobRunner(db, github, sleeper=sleeper)
     app = create_app(
-        settings=Settings(database_name="fetchiq_test", github_token="test-token"),
+        settings=Settings(database_name="fetchiq_test"),
         db=db,
         github=github,
         runner=runner,
@@ -210,7 +211,7 @@ async def test_over_1000_results_split_into_narrower_windows(db) -> None:
     )
     job = new_job_document(criteria)
     await db.search_jobs.insert_one(job)
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
     await github.aclose()
 
@@ -242,7 +243,7 @@ async def test_split_windows_do_not_insert_the_same_user_twice(db) -> None:
     )
     job = new_job_document(criteria)
     await db.search_jobs.insert_one(job)
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
     await github.aclose()
     assert await db.candidates.count_documents({"job_id": job["_id"], "github_user_id": 42}) == 1
