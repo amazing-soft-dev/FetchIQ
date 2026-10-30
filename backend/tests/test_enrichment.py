@@ -13,6 +13,7 @@ from app.enrichment import (
 from app.export import build_row
 from app.github import GitHubClient
 from app.models import SearchCriteria
+from conftest import FakeAuth
 
 
 def _readme(text: str, ref: str) -> httpx.Response:
@@ -131,7 +132,7 @@ async def test_enrichment_skips_forks_retries_master_and_keeps_published_email(d
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db)
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -205,7 +206,7 @@ async def test_repo_readmes_stop_when_an_email_is_found(db) -> None:
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -252,7 +253,7 @@ async def test_repository_readmes_stop_after_three(db) -> None:
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -278,7 +279,7 @@ async def test_profile_linkedin_skips_repository_readmes(db) -> None:
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -311,7 +312,7 @@ async def test_email_and_linkedin_skip_the_profile_readme(db) -> None:
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -343,7 +344,7 @@ async def test_null_public_email_stays_empty_when_nothing_is_published(db) -> No
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -369,7 +370,7 @@ async def test_profile_api_email_is_stored_and_noreply_is_ignored(db) -> None:
         return httpx.Response(200, json=[])
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -427,7 +428,7 @@ async def test_profile_html_stores_offset_and_keeps_api_email_primary(db) -> Non
         return httpx.Response(404, json={"message": "Not Found"})
 
     job_id, _candidate = await _seed(db, keywords=[])
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job_id)
     await github.aclose()
 
@@ -499,7 +500,7 @@ async def test_reenrich_appends_contacts_and_keeps_stored_linkedin(db) -> None:
             raise AssertionError(request.url.path)
         return httpx.Response(404, json={"message": "Not Found"})
 
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(other["_id"])
     await github.aclose()
 
@@ -546,7 +547,7 @@ async def test_merge_fills_gaps_and_resets_status_only_when_the_email_changes(db
 
         return respond
 
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler("ada@example.com")))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler("ada@example.com")))
     assert await EnrichmentService(db, github).run(job["_id"]) == "done"
     await github.aclose()
     stored = await db.candidates.find_one({"login": "ada"})
@@ -563,7 +564,7 @@ async def test_merge_fills_gaps_and_resets_status_only_when_the_email_changes(db
         {"_id": job["_id"]},
         {"$set": {"checkpoint.last_enriched_user_id": None}},
     )
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler("grace@example.com")))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler("grace@example.com")))
     assert await EnrichmentService(db, github).run(job["_id"]) == "done"
     await github.aclose()
     changed = await db.candidates.find_one({"login": "ada"})
@@ -626,7 +627,7 @@ async def test_bad_profile_url_does_not_stop_the_next_profile(db) -> None:
             return httpx.Response(200, json=profile)
         return httpx.Response(404, json={"message": "Not Found"})
 
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     outcome = await EnrichmentService(db, github).run(job["_id"])
     await github.aclose()
 
@@ -671,7 +672,7 @@ async def test_dns_failure_stays_on_the_same_candidate(db) -> None:
     async def sleeper(_seconds: float) -> None:
         return None
 
-    github = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     with pytest.raises(RuntimeError, match="Could not resolve api.github.com"):
         await EnrichmentService(db, github).run(job["_id"])
     await github.aclose()

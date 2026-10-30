@@ -1,4 +1,4 @@
-"""One GitHub token, Retry-After, and exponential backoff. No token pool."""
+"""One GitHub App installation, Retry-After, and exponential backoff. No token pool."""
 
 import asyncio
 from dataclasses import dataclass
@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import httpx
+
+from app.github_auth import TokenSource
 
 RATE_LIMIT_STEP_SECONDS = 1.0
 CONNECT_RETRY_DELAYS = (60, 120, 300)
@@ -151,35 +153,39 @@ async def wait_out_rate_limit(seconds: float, sleeper, stopped) -> tuple[str | N
 
 
 class GitHubClient:
-    """HTTP client bound to the single token from the environment."""
+    """HTTP client that authenticates as the single GitHub App installation."""
 
     def __init__(
         self,
-        token: str,
+        auth: TokenSource,
         *,
         base_url: str = "https://api.github.com",
         transport: httpx.BaseTransport | None = None,
         sleeper=None,
     ) -> None:
-        self._token = token
+        self._auth = auth
         self._sleeper = sleeper or asyncio.sleep
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "FetchIQ",
-        }
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.AsyncClient(
             base_url=base_url,
             transport=transport,
-            headers=headers,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "FetchIQ",
+            },
             timeout=httpx.Timeout(30.0),
             follow_redirects=False,
         )
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        await self._auth.aclose()
+
+    def _is_api_url(self, url: str) -> bool:
+        """True for relative paths and URLs on the API host. Other hosts get no credentials."""
+
+        host = httpx.URL(url).host
+        return not host or host == self._client.base_url.host
 
     def _request_host(self, url: str) -> str:
         """Hostname for this request, with no userinfo, path, or query."""
@@ -196,20 +202,30 @@ class GitHubClient:
         *,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        if not self._token:
-            raise RuntimeError("GITHUB_TOKEN is required")
+        send_auth = self._is_api_url(url)
+        auth_retried = False
         connect_tries = 0
         server_tries = 0
         delay = 1.0
         while True:
+            request_headers = dict(headers or {})
+            token = None
             try:
-                response = await self._client.get(url, params=params, headers=headers)
+                if send_auth:
+                    token = await self._auth.token()
+                    request_headers["Authorization"] = f"Bearer {token}"
+                response = await self._client.get(url, params=params, headers=request_headers)
             except httpx.ConnectError:
                 if connect_tries < len(CONNECT_RETRY_DELAYS):
                     await self._sleeper(CONNECT_RETRY_DELAYS[connect_tries])
                     connect_tries += 1
                     continue
                 raise RuntimeError(f"Could not resolve {self._request_host(url)}") from None
+            if response.status_code == 401 and token is not None and not auth_retried:
+                # The installation token was revoked or expired early. Mint a new one once.
+                auth_retried = True
+                self._auth.invalidate(token)
+                continue
             if is_rate_limited(response):
                 raise RateLimited(
                     retry_after=retry_after_seconds(response, server_tries),

@@ -15,7 +15,7 @@ These sources are never used to fill an email:
 - `noreply` placeholders
 - addresses assembled from a name and a domain
 
-One `GITHUB_TOKEN` is read from the environment. Rate limits are honored with `Retry-After` and exponential backoff. FetchIQ does not rotate tokens or export a list for resale.
+FetchIQ authenticates to GitHub as one GitHub App installation. It signs a short-lived JWT with the app's private key, trades it for an installation token, caches that token, and renews it shortly before it expires. Rate limits are honored with `Retry-After` and exponential backoff. FetchIQ does not use a pool of tokens or export a list for resale.
 
 ## Stack
 
@@ -31,7 +31,13 @@ One `GITHUB_TOKEN` is read from the environment. Rate limits are honored with `R
 cp .env.example .env
 ```
 
-Set `MONGODB_URI` and `GITHUB_TOKEN` in `.env`. Do not commit that file.
+Set `MONGODB_URI` in `.env`, plus the three GitHub App values:
+
+- `GITHUB_APP_ID`: the app's ID from its settings page.
+- `GITHUB_APP_INSTALLATION_ID`: the installation of that app on the organization (the number at the end of `https://github.com/organizations/<org>/settings/installations/<id>`).
+- `GITHUB_APP_PRIVATE_KEY_PATH`: path to the `.pem` file generated under the app's "Private keys". A relative path is resolved from the repository root.
+
+The app needs no repository or organization permissions, since FetchIQ reads only public data. The API refuses to start, naming the setting, when a value is missing or the key file cannot be read. GitHub Enterprise Server works by pointing `GITHUB_API_BASE` at its API root, because the token exchange uses the same base URL. Do not commit `.env` or the key file.
 
 From the repository root, create a virtual environment and install the backend from `backend/requirements.txt`:
 
@@ -64,7 +70,7 @@ The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
 ## Jobs
 
-`POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 waits until the GitHub rate limit resets, then continues from the same checkpoint unless the user paused or cancelled. Resume continues a paused job from that checkpoint with the same token.
+`POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 waits until the GitHub rate limit resets, then continues from the same checkpoint unless the user paused or cancelled. Resume continues a paused job from that checkpoint with the same installation.
 
 Search criteria:
 

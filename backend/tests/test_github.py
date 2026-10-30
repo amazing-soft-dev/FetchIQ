@@ -4,6 +4,8 @@ import httpx
 import pytest
 
 from app.github import GitHubClient, RateLimited, parse_next_link
+from app.github_auth import GitHubAuthError
+from conftest import FakeAuth
 
 
 def test_parse_next_link() -> None:
@@ -39,7 +41,7 @@ async def test_rate_limit_headers_pause_without_retrying() -> None:
     async def sleeper(seconds: float) -> None:
         sleeps.append(seconds)
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     with pytest.raises(RateLimited) as caught:
         await client.get("/search/users")
     assert calls["count"] == 1
@@ -60,7 +62,7 @@ async def test_forbidden_rate_limit_uses_reset_header() -> None:
             json={"message": "API rate limit exceeded"},
         )
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     with pytest.raises(RateLimited) as caught:
         await client.get("/users/octocat")
     assert caught.value.reset_at == datetime.fromtimestamp(1700000123, tz=UTC)
@@ -72,7 +74,7 @@ async def test_ordinary_forbidden_is_returned() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"message": "Resource not accessible"})
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     response = await client.get("/repos/octocat/missing")
     assert response.status_code == 403
     await client.aclose()
@@ -93,7 +95,7 @@ async def test_server_errors_use_exponential_backoff() -> None:
     async def sleeper(seconds: float) -> None:
         sleeps.append(seconds)
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     response = await client.get("/users/octocat")
     assert response.status_code == 200
     assert calls["count"] == 3
@@ -109,7 +111,7 @@ async def test_html_fetch_overrides_accept_and_uses_the_profile_url() -> None:
         seen.append((str(request.url), request.headers["accept"]))
         return httpx.Response(200, text="<html></html>")
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler))
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
     html = await client.get_html("https://github.com/octocat")
     api = await client.get("/users/octocat")
     await client.aclose()
@@ -122,12 +124,76 @@ async def test_html_fetch_overrides_accept_and_uses_the_profile_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_token_does_not_call_github() -> None:
+async def test_rejected_installation_token_is_replaced_once() -> None:
+    class Rotating(FakeAuth):
+        def __init__(self) -> None:
+            super().__init__("old-token")
+            self.invalidated: list[str] = []
+
+        async def token(self) -> str:
+            return "new-token" if self.invalidated else "old-token"
+
+        def invalidate(self, stale: str) -> None:
+            self.invalidated.append(stale)
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["authorization"])
+        if request.headers["authorization"] == "Bearer old-token":
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(200, json={"ok": True})
+
+    auth = Rotating()
+    client = GitHubClient(auth, transport=httpx.MockTransport(handler))
+    response = await client.get("/users/octocat")
+    await client.aclose()
+    assert response.status_code == 200
+    assert seen == ["Bearer old-token", "Bearer new-token"]
+    assert auth.invalidated == ["old-token"]
+
+
+@pytest.mark.asyncio
+async def test_persistent_401_is_returned_after_one_retry() -> None:
+    calls = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    response = await client.get("/users/octocat")
+    await client.aclose()
+    assert response.status_code == 401
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_token_is_only_sent_to_the_api_host() -> None:
+    seen: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.host] = request.headers.get("authorization")
+        return httpx.Response(200, json={})
+
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await client.get_html("https://github.com/octocat")
+    await client.get("https://api.github.com/search/users?page=2")
+    await client.aclose()
+    assert seen == {"github.com": None, "api.github.com": "Bearer test-token"}
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_failure_stops_the_request() -> None:
+    class Broken(FakeAuth):
+        async def token(self) -> str:
+            raise GitHubAuthError("GitHub refused the installation token request (HTTP 401)")
+
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("request should not be sent")
 
-    client = GitHubClient("", transport=httpx.MockTransport(handler))
-    with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+    client = GitHubClient(Broken(), transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubAuthError):
         await client.get("/user")
     await client.aclose()
 
@@ -154,7 +220,7 @@ async def test_connect_error_retries_then_succeeds() -> None:
     async def sleeper(seconds: float) -> None:
         sleeps.append(seconds)
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     response = await client.get("/users/octocat")
     assert response.status_code == 200
     assert calls["count"] == 2
@@ -176,7 +242,7 @@ async def test_connect_error_names_the_host() -> None:
     async def sleeper(seconds: float) -> None:
         sleeps.append(seconds)
 
-    client = GitHubClient("test-token", transport=httpx.MockTransport(handler), sleeper=sleeper)
+    client = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler), sleeper=sleeper)
     with pytest.raises(RuntimeError, match="Could not resolve api.github.com") as caught:
         await client.get("/users/octocat")
     assert "test-token" not in str(caught.value)
