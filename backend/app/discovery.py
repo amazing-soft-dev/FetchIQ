@@ -20,6 +20,7 @@ from app.github import (
     wait_out_rate_limit,
 )
 from app.models import SearchCriteria
+from app.places import KIND_ORDER, places_for_country
 
 SEARCH_RESULT_CAP = 1000
 PAGE_SIZE = 100
@@ -33,12 +34,42 @@ def quote_term(value: str) -> str:
 
 
 def location_seeds(criteria: SearchCriteria) -> list[str]:
+    """Cities, then regions and aliases, then the country name.
+
+    Selected US states replace a bare United States search. The list is the
+    one a job snapshots, so later edits to the place file do not reshuffle it.
+    """
+
     seeds: list[str] = []
+    seen: set[str] = set()
+
+    def add(name: str) -> None:
+        key = name.casefold()
+        if not name or key in seen:
+            return
+        seen.add(key)
+        seeds.append(name)
+
     for country in criteria.countries:
         if country == UNITED_STATES and criteria.us_states:
-            seeds.extend(criteria.us_states)
-        else:
-            seeds.append(country)
+            selected = set(criteria.us_states)
+            cities = [
+                place
+                for place in places_for_country(country)
+                if place.kind == "city" and place.region in selected
+            ]
+            for place in sorted(cities, key=lambda place: (place.rank, place.name)):
+                add(place.name)
+            for state in criteria.us_states:
+                add(state)
+            continue
+        ordered = sorted(
+            places_for_country(country),
+            key=lambda place: (KIND_ORDER.get(place.kind, 9), place.rank, place.name),
+        )
+        for place in ordered:
+            add(place.name)
+        add(country)
     return seeds
 
 
@@ -89,6 +120,55 @@ def _window(start: date, end: date, location: str) -> dict[str, Any]:
         "next_url": None,
         "pages_fetched": 0,
     }
+
+
+def _place_checkpoint(criteria: SearchCriteria, today: date) -> dict[str, Any]:
+    start, end = account_age_window(
+        min_years=criteria.account_age.min_years,
+        min_months=criteria.account_age.min_months,
+        max_years=criteria.account_age.max_years,
+        max_months=criteria.account_age.max_months,
+        today=today,
+    )
+    locations = location_seeds(criteria)
+    window = _window(start, end, locations[0]) if locations else None
+    return {
+        "phase": "discovery",
+        "locations": locations,
+        "index": 0,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "window": window,
+        "pending": [],
+    }
+
+
+def _advance_location(checkpoint: dict[str, Any]) -> None:
+    """Finish the current slice, then a split half, then the next place."""
+
+    pending = list(checkpoint.get("pending") or [])
+    locations = list(checkpoint.get("locations") or [])
+    index = int(checkpoint.get("index") or 0)
+    if pending:
+        nxt = pending.pop(0)
+        checkpoint["pending"] = pending
+        checkpoint["window"] = _window(
+            date.fromisoformat(nxt["start"]),
+            date.fromisoformat(nxt["end"]),
+            locations[index],
+        )
+        return
+    index += 1
+    checkpoint["index"] = index
+    checkpoint["pending"] = []
+    if index >= len(locations):
+        checkpoint["window"] = None
+        return
+    checkpoint["window"] = _window(
+        date.fromisoformat(checkpoint["start"]),
+        date.fromisoformat(checkpoint["end"]),
+        locations[index],
+    )
 
 
 _OBSOLETE_CANDIDATE_FIELDS = {
@@ -210,7 +290,19 @@ class DiscoveryService:
         phase = (checkpoint or {}).get("phase")
         if phase in {"discovery_done", "enrichment", "enrichment_done"}:
             return "done"
-        if not checkpoint or not checkpoint.get("windows"):
+        if checkpoint and "locations" not in checkpoint and checkpoint.get("windows") is not None:
+            return await self._drain_windows(job_id, job, criteria, checkpoint)
+        if not checkpoint or "locations" not in checkpoint:
+            checkpoint = _place_checkpoint(criteria, self.today)
+            await self._save_checkpoint(job_id, checkpoint)
+        return await self._drain_locations(job_id, job, criteria, checkpoint)
+
+    async def _drain_windows(
+        self, job_id: str, job: dict, criteria: SearchCriteria, checkpoint: dict
+    ) -> str:
+        """Finish a checkpoint saved before place lists existed."""
+
+        if not checkpoint.get("windows"):
             start, end = account_age_window(
                 min_years=criteria.account_age.min_years,
                 min_months=criteria.account_age.min_months,
@@ -264,7 +356,11 @@ class DiscoveryService:
                     job_id,
                     "error",
                     f"GitHub search returned {response.status_code}",
-                    {"start": window["start"], "end": window["end"]},
+                    {
+                        "location": window.get("location"),
+                        "start": window["start"],
+                        "end": window["end"],
+                    },
                 )
                 checkpoint["windows"] = windows[1:]
                 await self._save_checkpoint(job_id, checkpoint)
@@ -288,6 +384,7 @@ class DiscoveryService:
                         "split",
                         "Split a date window that exceeded 1000 results",
                         {
+                            "location": location,
                             "total_count": total,
                             "start": window["start"],
                             "end": window["end"],
@@ -326,6 +423,125 @@ class DiscoveryService:
                 checkpoint["windows"] = [window, *windows[1:]]
             else:
                 checkpoint["windows"] = windows[1:]
+            await self._save_checkpoint(job_id, checkpoint)
+            stopped = await self._enrich_page(job_id)
+            if stopped:
+                return stopped
+
+    async def _drain_locations(
+        self, job_id: str, job: dict, criteria: SearchCriteria, checkpoint: dict
+    ) -> str:
+        discovered = int((job.get("counts") or {}).get("discovered") or 0)
+        limit = criteria.candidate_limit
+
+        while True:
+            control = await self._control(job_id)
+            if control:
+                await self._finish_control(job_id, control, checkpoint)
+                return control
+            if discovered >= limit:
+                return await self._complete(job_id, checkpoint)
+            window = checkpoint.get("window")
+            if not window:
+                return await self._complete(job_id, checkpoint)
+
+            location = str(window["location"])
+            if checkpoint.get("noted_index") != checkpoint.get("index"):
+                await self._event(
+                    job_id,
+                    "search",
+                    f"Searching {location}",
+                    {
+                        "location": location,
+                        "start": window["start"],
+                        "end": window["end"],
+                    },
+                )
+                checkpoint["noted_index"] = checkpoint.get("index")
+                await self._save_checkpoint(job_id, checkpoint)
+
+            start = date.fromisoformat(window["start"])
+            end = date.fromisoformat(window["end"])
+            try:
+                response = await self._fetch(window, criteria, start, end)
+            except RateLimited as exc:
+                control = await self._wait_through_rate_limit(job_id, checkpoint, exc)
+                if control:
+                    await self._finish_control(job_id, control, checkpoint)
+                    return control
+                continue
+
+            await self._store_budget(job_id, response, retry_after_seconds=None)
+            if response.status_code >= 400:
+                await self._mark_incomplete(
+                    job_id, f"github search returned {response.status_code}"
+                )
+                await self._event(
+                    job_id,
+                    "error",
+                    f"GitHub search returned {response.status_code}",
+                    {"location": location, "start": window["start"], "end": window["end"]},
+                )
+                _advance_location(checkpoint)
+                await self._save_checkpoint(job_id, checkpoint)
+                continue
+
+            payload = response.json()
+            total = int(payload.get("total_count") or 0)
+            if window.get("next_url") is None and total > SEARCH_RESULT_CAP:
+                halves = split_date_window(start, end)
+                if halves is not None:
+                    left, right = halves
+                    checkpoint["pending"] = [
+                        {"start": right[0].isoformat(), "end": right[1].isoformat()},
+                        *list(checkpoint.get("pending") or []),
+                    ]
+                    checkpoint["window"] = _window(*left, location)
+                    await self._save_checkpoint(job_id, checkpoint)
+                    await self._event(
+                        job_id,
+                        "split",
+                        "Split a date window that exceeded 1000 results",
+                        {
+                            "location": location,
+                            "total_count": total,
+                            "start": window["start"],
+                            "end": window["end"],
+                        },
+                    )
+                    continue
+                await self._mark_incomplete(job_id, "single-day window exceeded 1000 results")
+
+            for item in payload.get("items") or []:
+                if discovered >= limit:
+                    break
+                if not isinstance(item, dict) or "id" not in item or "login" not in item:
+                    continue
+                outcome = await upsert_candidate(self.db, job_id, item)
+                if outcome == "inserted":
+                    discovered += 1
+
+            if discovered >= limit:
+                stopped = await self._enrich_page(job_id)
+                if stopped:
+                    return stopped
+                return await self._complete(job_id, checkpoint)
+
+            next_url = parse_next_link(response.headers.get("link"))
+            current_url = str(response.url)
+            pages = int(window["pages_fetched"]) + 1
+            if next_url and next_url == current_url:
+                await self._mark_incomplete(job_id, "repeated page")
+                _advance_location(checkpoint)
+            elif next_url and pages >= MAX_PAGES:
+                await self._mark_incomplete(job_id, "pagination cap")
+                _advance_location(checkpoint)
+            elif next_url:
+                window["next_url"] = next_url
+                window["pages_fetched"] = pages
+                checkpoint["window"] = window
+            else:
+                _advance_location(checkpoint)
             await self._save_checkpoint(job_id, checkpoint)
             stopped = await self._enrich_page(job_id)
             if stopped:
