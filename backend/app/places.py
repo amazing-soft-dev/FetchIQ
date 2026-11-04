@@ -59,3 +59,17 @@ def load_places() -> PlaceCatalog:
 def places_for_country(country: str) -> tuple[Place, ...]:
     catalog = load_places()
     return tuple(place for place in catalog.places if place.country == country)
+
+
+@lru_cache(maxsize=1)
+def _places_by_name() -> dict[str, tuple[Place, ...]]:
+    grouped: dict[str, list[Place]] = {}
+    for place in load_places().places:
+        grouped.setdefault(fold_place(place.name), []).append(place)
+    return {name: tuple(places) for name, places in grouped.items()}
+
+
+def places_named(name: str) -> tuple[Place, ...]:
+    """Places whose name matches after accent-folding. Empty when nothing matches."""
+
+    return _places_by_name().get(fold_place(name), ())
