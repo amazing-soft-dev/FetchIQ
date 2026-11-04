@@ -6,7 +6,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
-from app.discovery import DiscoveryService, build_user_query, new_job_document, upsert_candidate
+from app.discovery import (
+    DiscoveryService,
+    build_user_query,
+    location_seeds,
+    new_job_document,
+    upsert_candidate,
+)
 from app.github import GitHubClient
 from app.main import create_app
 from app.models import AccountAge, SearchCriteria
@@ -265,7 +271,6 @@ async def test_over_1000_results_split_into_narrower_windows(db) -> None:
     assert outcome == "done"
     assert calls[0] > 40
     assert any(span <= 40 for span in calls)
-    assert all(span < calls[0] for span in calls[1:])
     count = await db.candidates.count_documents({"job_id": job["_id"]})
     assert count >= 2
     stored = await db.search_jobs.find_one({"_id": job["_id"]})
@@ -749,7 +754,8 @@ async def test_connect_failure_stops_incomplete_and_resume_continues(db) -> None
             assert stopped["error"].startswith("Could not resolve")
             stored = await db.search_jobs.find_one({"_id": job_id})
             assert stored["checkpoint"]["phase"] == "discovery"
-            assert stored["checkpoint"]["windows"]
+            assert stored["checkpoint"]["locations"]
+            assert stored["checkpoint"]["window"]["location"]
 
             state["down"] = False
             resumed = await client.post(f"/api/jobs/{job_id}/resume")
@@ -812,7 +818,7 @@ async def test_each_country_is_searched_on_its_own(db) -> None:
             return httpx.Response(200, json={"total_count": 1, "items": [_user(1, "ada")]})
         if 'location:"France"' in query:
             return httpx.Response(200, json={"total_count": 1, "items": [_user(2, "grace")]})
-        raise AssertionError(query)
+        return httpx.Response(200, json={"total_count": 0, "items": []})
 
     _job_id, payload, _runner = await _create_and_run(
         db,
@@ -821,10 +827,12 @@ async def test_each_country_is_searched_on_its_own(db) -> None:
     )
     assert payload["status"] == "succeeded"
     assert payload["counts"]["discovered"] == 2
-    assert len(queries) == 2
     assert all(" OR " not in query for query in queries)
-    assert any('location:"Germany"' in query for query in queries)
-    assert any('location:"France"' in query for query in queries)
+    germany = next(index for index, query in enumerate(queries) if 'location:"Germany"' in query)
+    france = next(index for index, query in enumerate(queries) if 'location:"France"' in query)
+    assert any('location:"Berlin"' in query for query in queries[:germany])
+    assert any('location:"Paris"' in query for query in queries[germany + 1 : france])
+    assert queries[germany] != queries[france]
 
 
 @pytest.mark.asyncio
@@ -860,3 +868,143 @@ async def test_remaining_search_budget_does_not_sleep_until_reset(db) -> None:
 
     assert finished["status"] == "succeeded"
     assert sum(sleeps) < 30
+
+
+def test_cities_come_before_the_country_and_us_states_stay_selective() -> None:
+    germany = location_seeds(SearchCriteria(countries=["Germany"]))
+    assert germany[-1] == "Germany"
+    assert germany.index("Berlin") < germany.index("Germany")
+    assert "Valencia" not in germany
+    assert len(germany) == len({name.casefold() for name in germany})
+
+    texas = location_seeds(SearchCriteria(countries=["United States"], us_states=["Texas"]))
+    assert "United States" not in texas
+    assert texas[-1] == "Texas"
+    assert texas.index("Austin") < texas.index("Texas")
+    assert "Houston" in texas
+
+
+@pytest.mark.asyncio
+async def test_legacy_checkpoint_finishes_its_own_window(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    job["checkpoint"] = {
+        "phase": "discovery",
+        "windows": [
+            {
+                "start": "2024-01-01",
+                "end": "2024-01-02",
+                "location": "Germany",
+                "next_url": None,
+                "pages_fetched": 0,
+            }
+        ],
+    }
+    await db.search_jobs.insert_one(job)
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        queries.append(request.url.params["q"])
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert len(queries) == 1
+    assert 'location:"Germany"' in queries[0]
+    assert "Berlin" not in queries[0]
+
+
+@pytest.mark.asyncio
+async def test_paused_job_keeps_the_snapshotted_locations(db) -> None:
+    job = new_job_document(SearchCriteria(countries=["Venezuela"]))
+    job["checkpoint"] = {
+        "phase": "discovery",
+        "locations": ["Caracas", "Venezuela"],
+        "index": 0,
+        "start": "2024-01-01",
+        "end": "2024-01-02",
+        "window": {
+            "start": "2024-01-01",
+            "end": "2024-01-02",
+            "location": "Caracas",
+            "next_url": None,
+            "pages_fetched": 0,
+        },
+        "pending": [],
+    }
+    await db.search_jobs.insert_one(job)
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        queries.append(request.url.params["q"])
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert len(queries) == 2
+    assert 'location:"Caracas"' in queries[0]
+    assert 'location:"Venezuela"' in queries[1]
+
+
+@pytest.mark.asyncio
+async def test_search_event_names_the_place(db) -> None:
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        queries.append(request.url.params["q"])
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    job = new_job_document(SearchCriteria(countries=["Venezuela"], candidate_limit=1))
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    events = await db.job_events.find({"job_id": job["_id"], "kind": "search"}).to_list(None)
+    assert events
+    assert events[0]["detail"]["location"] == "Caracas"
+    assert "Maracaibo" not in queries[0]
+    assert 'location:"Caracas"' in queries[0]
+
+
+@pytest.mark.asyncio
+async def test_city_and_country_queries_count_one_user_once(db) -> None:
+    profiles: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search/users":
+            return httpx.Response(200, json={"total_count": 1, "items": [_user(7, "ada")]})
+        if request.url.path == "/users/ada":
+            profiles.append(request.url.path)
+            return httpx.Response(
+                200,
+                json={
+                    "login": "ada",
+                    "id": 7,
+                    "name": "Ada",
+                    "bio": None,
+                    "company": None,
+                    "blog": None,
+                    "location": "Berlin",
+                    "email": None,
+                    "created_at": "2020-01-01T00:00:00Z",
+                    "public_repos": 1,
+                },
+            )
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=5))
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert await db.candidates.count_documents({"login": "ada"}) == 1
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["counts"]["discovered"] == 1
+    assert profiles == ["/users/ada"]

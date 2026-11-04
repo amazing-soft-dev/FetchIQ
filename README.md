@@ -82,7 +82,7 @@ Search criteria:
 
 `GET /api/geo` lists countries and US states for the search form. `POST /api/presets` saves the same criteria for a later run.
 
-City and region names are shipped in `backend/app/data/places.json`. That file is built by `backend/scripts/build_places.py` from [GeoNames](https://www.geonames.org/) (CC BY 4.0) and [countriesnow.space](https://countriesnow.space/). The raw dumps are not in this repository.
+City and region names are shipped in `backend/app/data/places.json`. That file is built by `backend/scripts/build_places.py` from [GeoNames](https://www.geonames.org/) (CC BY 4.0) and [countriesnow.space](https://countriesnow.space/). The raw dumps are not in this repository. Choosing a country searches those cities, then the regions people write, then the country name. One location is finished before the next begins, and the list is saved on the job so a later edit to the file does not change a paused run. FetchIQ does not add its own search throttle or a pool of tokens.
 
 When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
 
