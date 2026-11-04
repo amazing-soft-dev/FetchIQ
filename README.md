@@ -82,6 +82,8 @@ Search criteria:
 
 `GET /api/geo` lists countries and US states for the search form. `POST /api/presets` saves the same criteria for a later run.
 
+City and region names are shipped in `backend/app/data/places.json`. That file is built by `backend/scripts/build_places.py` from [GeoNames](https://www.geonames.org/) (CC BY 4.0) and [countriesnow.space](https://countriesnow.space/). The raw dumps are not in this repository.
+
 When a slice reports more than 1,000 hits, the job splits the date window. A slice that cannot be split is marked incomplete.
 
 `GET /api/jobs/{id}/export.csv` streams UTF-8 CSV. One row is emitted per GitHub user id. `include_no_contact=false` omits rows with no public contact. Cells that start with `=`, `+`, `-`, or `@` are prefixed so a spreadsheet does not treat them as formulas.
