@@ -22,6 +22,60 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+export type OverlapJob = {
+  id: string;
+  countries: string[];
+  live: number;
+  matched: number;
+  fresh: number;
+};
+
+export type OverlapPreview = {
+  fresh: number;
+  jobs: OverlapJob[];
+};
+
+export type PlaceReport = {
+  location: string;
+  reported: number | null;
+  fetched: number | null;
+  inserted: number | null;
+  updated: number | null;
+  duplicates: number | null;
+  status: string;
+};
+
+export type SliceCap = {
+  location: string | null;
+  start: string | null;
+  end: string | null;
+  reason: string;
+  reported: number | null;
+  fetched: number | null;
+};
+
+export type SearchAnalysis = {
+  stop_reason: string;
+  headline: string;
+  limit: number;
+  live: number;
+  inserted: number;
+  updated: number | null;
+  duplicates: number | null;
+  slots: number;
+  shortfall: number;
+  moved_out: number | null;
+  window: { start: string; end: string } | null;
+  places_known: number;
+  places_unknown: number;
+  places: PlaceReport[];
+  caps: SliceCap[];
+  already_saved: OverlapJob[];
+  covered_countries: string[];
+  uncollected_countries: string[];
+  suggestions: string[];
+};
+
 export type Job = {
   id: string;
   status: JobStatus;
@@ -35,6 +89,7 @@ export type Job = {
     emails: number;
     linkedin_without_email: number;
   };
+  overlap_preview: OverlapPreview | null;
   error: string | null;
   created_at: string | null;
   updated_at: string | null;

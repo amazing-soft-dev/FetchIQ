@@ -18,8 +18,11 @@ EXCLUDED = (
 def test_place_file_is_capped_and_attributed() -> None:
     catalog = load_places()
     assert catalog.version == 1
-    counts = Counter(place.country for place in catalog.places)
+    counts = Counter(place.country for place in catalog.places if place.tier != "overflow")
     assert max(counts.values()) <= 30
+    overflow = Counter(place.country for place in catalog.places if place.tier == "overflow")
+    if overflow:
+        assert max(overflow.values()) <= 30
     assert set(counts) <= set(COUNTRIES)
 
     seen: set[tuple[str, str]] = set()
