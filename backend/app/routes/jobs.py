@@ -236,6 +236,41 @@ async def cancel_job(job_id: str, request: Request) -> dict:
     return await present_job(db, await _load(db, job_id))
 
 
+async def running_country_conflict(db, document: dict) -> str | None:
+    """Explain why this job must wait: another running job already searches a country of its own.
+
+    Two jobs on one country read the same GitHub pages and take each other's unchecked
+    profiles, so the second one is held until the first finishes, pauses or is cancelled.
+    """
+
+    countries = [
+        country
+        for country in ((document.get("criteria") or {}).get("countries") or [])
+        if isinstance(country, str)
+    ]
+    if not countries:
+        return None
+    other = await db.search_jobs.find_one(
+        {
+            "_id": {"$ne": document["_id"]},
+            "status": "running",
+            "criteria.countries": {"$in": countries},
+        },
+        {"criteria.countries": 1},
+    )
+    if other is None:
+        return None
+    shared = [
+        country
+        for country in countries
+        if country in ((other.get("criteria") or {}).get("countries") or [])
+    ]
+    return (
+        f"Job {other['_id']} is already searching {', '.join(shared)}. "
+        "Wait for it to finish, or pause or cancel it, before starting this one."
+    )
+
+
 async def _kick(job_id: str, request: Request, *, allowed: set[str]) -> dict:
     db = request.app.state.db
     document = await _load(db, job_id)
@@ -244,6 +279,9 @@ async def _kick(job_id: str, request: Request, *, allowed: set[str]) -> dict:
     )
     if document["status"] not in allowed and not held:
         raise HTTPException(status_code=409, detail="job cannot be started")
+    conflict = await running_country_conflict(db, document)
+    if conflict is not None:
+        raise HTTPException(status_code=409, detail=conflict)
     try:
         await request.app.state.runner.kick(job_id)
     except RuntimeError as exc:

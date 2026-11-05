@@ -9,6 +9,11 @@ and a location is finished only when GitHub sends no next page.
 
 from typing import Any
 
+# Pages in a row with no new or updated profile before a location is dropped while an
+# earlier search already holds recent profiles. GitHub orders by best match, so the
+# first page of a repeated search is the one the earlier search already read.
+DUPLICATE_PAGE_LIMIT = 3
+
 
 def unread(reported: int | None, fetched: int) -> int:
     if reported is None:
@@ -66,10 +71,27 @@ def distribute(total: int, weights: list[float]) -> list[int]:
     return shares
 
 
+def only_duplicates(cursor: dict[str, Any]) -> bool:
+    """True once a location has read enough pages in a row that yielded nothing."""
+
+    return int(cursor.get("zero_pages") or 0) >= DUPLICATE_PAGE_LIMIT
+
+
+def note_page_yield(cursor: dict[str, Any], *, fetched: int, slots: int) -> None:
+    """Count pages in a row without a slot. A page that yields resets the run."""
+
+    if fetched <= 0:
+        return
+    if slots > 0:
+        cursor["zero_pages"] = 0
+    else:
+        cursor["zero_pages"] = int(cursor.get("zero_pages") or 0) + 1
+
+
 def can_fetch(cursor: dict[str, Any], *, stop_duplicates: bool) -> bool:
     if cursor.get("exhausted"):
         return False
-    if stop_duplicates and int(cursor.get("fetched") or 0) > 0 and taken(cursor) == 0:
+    if stop_duplicates and only_duplicates(cursor):
         return False
     return taken(cursor) < int(cursor.get("share") or 0)
 
