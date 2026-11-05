@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.analysis import build_analysis, preview_overlap
 from app.db import isoformat, utcnow
 from app.discovery import new_job_document
 from app.export import stream_job_csv
@@ -104,6 +105,7 @@ def public_job(
         },
         "request_budget": _budget(document.get("request_budget")),
         "error": document.get("error"),
+        "overlap_preview": document.get("overlap_preview"),
         "created_at": isoformat(document.get("created_at")),
         "updated_at": isoformat(document.get("updated_at")),
     }
@@ -146,9 +148,17 @@ async def list_jobs(request: Request) -> dict:
 
 @router.post("/jobs", status_code=201)
 async def create_job(body: JobCreate, request: Request) -> dict:
+    db = request.app.state.db
     document = new_job_document(body.criteria)
-    await request.app.state.db.search_jobs.insert_one(document)
-    return await present_job(request.app.state.db, document)
+    document["overlap_preview"] = await preview_overlap(db, body.criteria, document["created_at"])
+    await db.search_jobs.insert_one(document)
+    return await present_job(db, document)
+
+
+@router.get("/jobs/{job_id}/analysis")
+async def job_analysis(job_id: str, request: Request) -> dict:
+    db = request.app.state.db
+    return await build_analysis(db, await _load(db, job_id))
 
 
 @router.get("/jobs/{job_id}")

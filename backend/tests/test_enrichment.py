@@ -478,12 +478,10 @@ async def test_reenrich_appends_contacts_and_keeps_stored_linkedin(db) -> None:
     other["status"] = "running"
     other["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
     await db.search_jobs.insert_one(other)
-    assert (
-        await upsert_candidate(
-            db, other["_id"], {"id": 7, "login": "ada", "html_url": "https://github.com/ada"}
-        )
-        == "already_stored"
+    outcome, _source = await upsert_candidate(
+        db, other["_id"], {"id": 7, "login": "ada", "html_url": "https://github.com/ada"}
     )
+    assert outcome == "updated"
     other_job = await db.search_jobs.find_one({"_id": other["_id"]})
     assert other_job["counts"]["discovered"] == 0
     moved = await db.candidates.find_one({"login": "ada"})

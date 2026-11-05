@@ -122,7 +122,7 @@ def test_criteria_rejects_reversed_age_unknown_places_and_states_without_us() ->
 async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -> None:
     job = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(job)
-    first = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    first, _source = await upsert_candidate(db, job["_id"], _user(7, "ada"))
     await db.candidates.update_one(
         {"login": "ada"},
         {
@@ -136,9 +136,9 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
             }
         },
     )
-    second = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    second, _source = await upsert_candidate(db, job["_id"], _user(7, "ada"))
     assert first == "inserted"
-    assert second == "already_stored"
+    assert second == "duplicate"
     same = await db.candidates.find_one({"login": "ada"})
     assert same["enrichment_status"] == "enriched"
     assert same["name"] == "Ada"
@@ -148,11 +148,13 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
     assert "relevant_repository_urls" not in same
     assert await db.candidates.count_documents({"login": "ada"}) == 1
     stored = await db.search_jobs.find_one({"_id": job["_id"]})
-    assert stored["counts"]["discovered"] == 1
+    assert stored["counts"]["discovered"] == 0
 
     other = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(other)
-    assert await upsert_candidate(db, other["_id"], _user(8, "ada")) == "already_stored"
+    moved_outcome, moved_from = await upsert_candidate(db, other["_id"], _user(8, "ada"))
+    assert moved_outcome == "updated"
+    assert moved_from == job["_id"]
     moved = await db.candidates.find_one({"login": "ada"})
     assert moved["job_id"] == other["_id"]
     assert moved["github_user_id"] == 7
@@ -162,7 +164,7 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
     assert await db.candidates.count_documents({"job_id": job["_id"]}) == 0
     other_stored = await db.search_jobs.find_one({"_id": other["_id"]})
     assert other_stored["counts"]["discovered"] == 0
-    assert stored["counts"]["discovered"] == 1
+    assert stored["counts"]["discovered"] == 0
 
 
 @pytest.mark.asyncio
@@ -184,7 +186,8 @@ async def test_recent_profile_is_left_unchanged(db) -> None:
     )
     other = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(other)
-    assert await upsert_candidate(db, other["_id"], _user(8, "ada")) == "already_stored"
+    outcome, _source = await upsert_candidate(db, other["_id"], _user(8, "ada"))
+    assert outcome == "fresh"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
     assert stored["github_user_id"] == 7
@@ -215,7 +218,8 @@ async def _stored_profile(db, *, age_days: int, email: str | None) -> tuple[dict
 @pytest.mark.asyncio
 async def test_profile_checked_within_two_weeks_is_skipped_even_without_an_email(db) -> None:
     job, other = await _stored_profile(db, age_days=13, email=None)
-    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    assert outcome == "fresh"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
     assert stored["enrichment_status"] == "enriched"
@@ -224,7 +228,8 @@ async def test_profile_checked_within_two_weeks_is_skipped_even_without_an_email
 @pytest.mark.asyncio
 async def test_old_profile_with_an_email_is_skipped(db) -> None:
     job, other = await _stored_profile(db, age_days=30, email="ada@example.com")
-    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    assert outcome == "has_email"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
     assert stored["enrichment_status"] == "enriched"
@@ -234,7 +239,8 @@ async def test_old_profile_with_an_email_is_skipped(db) -> None:
 @pytest.mark.asyncio
 async def test_old_profile_without_an_email_is_searched_again(db) -> None:
     _job, other = await _stored_profile(db, age_days=15, email=None)
-    assert await upsert_candidate(db, other["_id"], _user(7, "ada")) == "already_stored"
+    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    assert outcome == "updated"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == other["_id"]
     assert stored["enrichment_status"] == "merge"
@@ -328,7 +334,7 @@ async def test_pagination_follows_the_link_header(db) -> None:
             )
         return httpx.Response(200, json={"total_count": 2, "items": [item]})
 
-    _job_id, payload, _runner = await _create_and_run(db, handler)
+    _job_id, payload, _runner = await _create_and_run(db, handler, _criteria(candidate_limit=5000))
     assert payload["status"] == "succeeded"
     assert payload["counts"]["discovered"] == 2
 
@@ -368,7 +374,7 @@ async def test_pagination_cap_flags_incomplete(db) -> None:
             json={"total_count": 50, "items": [_user(page, f"user{page}")]},
         )
 
-    _job_id, payload, _runner = await _create_and_run(db, handler)
+    _job_id, payload, _runner = await _create_and_run(db, handler, _criteria(candidate_limit=5000))
     assert calls["count"] >= 10
     assert payload["status"] == "incomplete"
     assert "pagination cap" in payload["incomplete_reasons"]
@@ -534,7 +540,10 @@ async def test_each_search_page_is_enriched_before_the_next(db) -> None:
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            created = await client.post(
+                "/api/jobs",
+                json={"criteria": _criteria(candidate_limit=5000)},
+            )
             job_id = created.json()["id"]
             await client.post(f"/api/jobs/{job_id}/start")
             await runner._tasks[job_id]
@@ -578,7 +587,10 @@ async def test_pause_stops_after_the_current_page(db) -> None:
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            created = await client.post("/api/jobs", json={"criteria": _criteria()})
+            created = await client.post(
+                "/api/jobs",
+                json={"criteria": _criteria(candidate_limit=5000)},
+            )
             job_id = created.json()["id"]
             await client.post(f"/api/jobs/{job_id}/start")
             await runner._tasks[job_id]
@@ -1008,3 +1020,180 @@ async def test_city_and_country_queries_count_one_user_once(db) -> None:
     stored = await db.search_jobs.find_one({"_id": job["_id"]})
     assert stored["counts"]["discovered"] == 1
     assert profiles == ["/users/ada"]
+
+
+@pytest.mark.asyncio
+async def test_one_page_increments_the_job_once(db, monkeypatch) -> None:
+    flushes: list[int] = []
+    real = DiscoveryService._flush_tally
+
+    async def spy(self, job_id, tally, checkpoint):
+        flushes.append(tally.inserted)
+        return await real(self, job_id, tally, checkpoint)
+
+    monkeypatch.setattr(DiscoveryService, "_flush_tally", spy)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(
+            200,
+            json={"total_count": 3, "items": [_user(1, "a"), _user(2, "b"), _user(3, "c")]},
+        )
+
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=3))
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert flushes == [3]
+    assert stored["counts"]["discovered"] == 3
+    assert stored["funnel"]["inserted"] == 3
+    assert stored["stop_reason"] == "limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_updated_profiles_in_the_slot_count(db) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a filled slot count must not fetch another page")
+
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=2))
+    job["funnel"]["updated"] = 2
+    job["counts"]["discovered"] = 0
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["stop_reason"] == "limit_reached"
+    assert stored["counts"]["discovered"] == 0
+
+
+@pytest.mark.asyncio
+async def test_incomplete_results_are_not_stored_as_the_total(db) -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return httpx.Response(
+                200,
+                json={"total_count": 5, "incomplete_results": True, "items": [_user(1, "ada")]},
+            )
+        return httpx.Response(200, json={"total_count": 80, "items": [_user(1, "ada")]})
+
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=1))
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    reported = stored["checkpoint"]["cursors"][0]["reported"]
+    assert reported == 80
+    assert calls["count"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_a_capped_day_keeps_the_other_half_searchable(db) -> None:
+    from app.discovery import _blank_cursor
+
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        query = request.url.params["q"]
+        queries.append(query)
+        match = CREATED.search(query)
+        assert match is not None
+        start, end = match.group(1), match.group(2)
+        if start != end:
+            return httpx.Response(200, json={"total_count": 2000, "items": []})
+        if start == "2024-06-14":
+            return httpx.Response(200, json={"total_count": 1001, "items": [_user(1, "ada")]})
+        return httpx.Response(200, json={"total_count": 1, "items": [_user(2, "grace")]})
+
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=10))
+    job["checkpoint"] = {
+        "phase": "discovery",
+        "mode": "allocate",
+        "locations": ["Berlin"],
+        "overflow": [],
+        "overflow_index": 0,
+        "start": "2024-06-14",
+        "end": "2024-06-15",
+        "cursors": [_blank_cursor("Berlin", "2024-06-14", "2024-06-15", 10, "primary")],
+        "caps": [],
+        "window": None,
+        "pending": [],
+    }
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert any("2024-06-14..2024-06-14" in query for query in queries)
+    assert any("2024-06-15..2024-06-15" in query for query in queries)
+    assert await db.candidates.count_documents({"login": "grace"}) == 1
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert any(cap["start"] == "2024-06-14" for cap in stored["checkpoint"]["caps"])
+
+
+@pytest.mark.asyncio
+async def test_zero_yield_does_not_open_overflow(db) -> None:
+    from app.discovery import _blank_cursor
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a duplicate-only location should not be fetched again")
+
+    cursor = _blank_cursor("Berlin", "2024-06-15", "2024-06-15", 10, "primary")
+    cursor["fetched"] = 4
+    cursor["duplicate"] = 4
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=10))
+    job["overlap_preview"] = {"fresh": 4, "jobs": []}
+    job["checkpoint"] = {
+        "phase": "discovery",
+        "mode": "allocate",
+        "locations": ["Berlin"],
+        "overflow": ["Extra"],
+        "overflow_index": 0,
+        "start": "2024-06-15",
+        "end": "2024-06-15",
+        "cursors": [cursor],
+        "caps": [],
+        "window": None,
+        "pending": [],
+    }
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["stop_reason"] == "supply_exhausted"
+    assert stored["checkpoint"]["overflow_index"] == 0
+
+
+def test_overflow_names_follow_population_and_stay_inside_the_state(monkeypatch) -> None:
+    from app.discovery import overflow_names
+    from app.places import Place
+
+    places = (
+        Place("United States", "Dallas", "city", "Texas", 0, population=1000, tier="overflow"),
+        Place("United States", "Austin", "city", "Texas", 1, population=500, tier="overflow"),
+        Place(
+            "United States",
+            "Los Angeles",
+            "city",
+            "California",
+            2,
+            population=5000,
+            tier="overflow",
+        ),
+        Place("United States", "Houston", "city", "Texas", 0, population=2000, tier="primary"),
+    )
+    monkeypatch.setattr("app.discovery.places_for_country", lambda _country: places)
+    monkeypatch.setattr("app.discovery.location_seeds", lambda _criteria: ["Houston", "Texas"])
+    names = overflow_names(SearchCriteria(countries=["United States"], us_states=["Texas"]))
+    assert names == ["Dallas", "Austin"]

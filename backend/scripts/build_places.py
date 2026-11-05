@@ -29,6 +29,7 @@ OUTPUT = ROOT / "app" / "data" / "places.json"
 
 MAX_PER_COUNTRY = 30
 MAX_REGIONS = 5
+OVERFLOW_PER_COUNTRY = 30
 # A second city must be at least this large before it makes the name unsafe.
 COLLISION_POPULATION = 50_000
 
@@ -215,22 +216,29 @@ def _add(
     name: str,
     region: str,
     rank: int,
+    *,
+    population: int = 0,
+    tier: str = "primary",
+    limit: int | None = None,
 ) -> bool:
-    if len(country_rows) >= MAX_PER_COUNTRY or not _usable_token(name):
+    cap = MAX_PER_COUNTRY if limit is None else limit
+    if len(country_rows) >= cap or not _usable_token(name):
         return False
     folded = fold_place(name)
     if name.casefold() in used or _blocked(folded, country, collisions):
         return False
     used.add(name.casefold())
-    country_rows.append(
-        {
-            "country": country,
-            "name": name,
-            "kind": kind,
-            "region": region,
-            "rank": rank,
-        }
-    )
+    row = {
+        "country": country,
+        "name": name,
+        "kind": kind,
+        "region": region,
+        "rank": rank,
+        "tier": tier,
+    }
+    if tier == "overflow":
+        row["population"] = population
+    country_rows.append(row)
     return True
 
 
@@ -315,24 +323,35 @@ def build() -> dict:
                 grouped[city["name"].casefold()] = city
         ordered = sorted(grouped.values(), key=lambda item: (-item["population"], item["name"]))
         city_rank = 0
+        overflow_rows: list[dict] = []
+        overflow_rank = 0
         for city in ordered:
-            if len(country_rows) >= MAX_PER_COUNTRY:
+            primary_open = len(country_rows) < MAX_PER_COUNTRY
+            target = country_rows if primary_open else overflow_rows
+            rank = city_rank if primary_open else overflow_rank
+            if not primary_open and overflow_rank >= OVERFLOW_PER_COUNTRY:
                 break
             added = False
             for spelling in _spellings(city["name"], city["ascii"]):
                 if _add(
-                    country_rows,
+                    target,
                     used,
                     collisions,
                     country,
                     "city",
                     spelling,
                     city["region"],
-                    city_rank,
+                    rank,
+                    population=int(city["population"]),
+                    tier="primary" if primary_open else "overflow",
+                    limit=None if primary_open else OVERFLOW_PER_COUNTRY,
                 ):
                     added = True
-            if added:
+            if added and primary_open:
                 city_rank += 1
+            elif added:
+                overflow_rank += 1
+        country_rows.extend(overflow_rows)
 
         if not any(row["kind"] == "city" for row in country_rows):
             listed = sorted(now_names.get(country, set()), key=lambda item: item.casefold())
@@ -346,7 +365,16 @@ def build() -> dict:
         rows.extend(country_rows)
 
     kind_order = {"city": 0, "region": 1, "alias": 2}
-    rows.sort(key=lambda row: (row["country"], kind_order[row["kind"]], row["rank"], row["name"]))
+    tier_order = {"primary": 0, "overflow": 1}
+    rows.sort(
+        key=lambda row: (
+            row["country"],
+            tier_order.get(row.get("tier") or "primary", 0),
+            kind_order[row["kind"]],
+            row["rank"],
+            row["name"],
+        )
+    )
     return {
         "version": 1,
         "sources": ["https://www.geonames.org/", "https://countriesnow.space/"],
