@@ -9,6 +9,7 @@ import type {
   JobSummary,
   OutreachStatus,
   Preset,
+  SearchAnalysis,
   SearchCriteria,
 } from "./types";
 
@@ -74,6 +75,10 @@ export function createJob(criteria: SearchCriteria): Promise<Job> {
 
 export function getJob(jobId: string): Promise<Job> {
   return request<Job>(`/api/jobs/${jobId}`);
+}
+
+export function getAnalysis(jobId: string): Promise<SearchAnalysis> {
+  return request<SearchAnalysis>(`/api/jobs/${jobId}/analysis`);
 }
 
 export function postJobAction(

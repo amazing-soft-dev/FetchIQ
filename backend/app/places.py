@@ -32,6 +32,8 @@ class Place:
     kind: str
     region: str
     rank: int
+    population: int = 0
+    tier: str = "primary"
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,8 @@ def load_places() -> PlaceCatalog:
             kind=row["kind"],
             region=row.get("region") or "",
             rank=int(row["rank"]),
+            population=int(row.get("population") or 0),
+            tier=row.get("tier") or "primary",
         )
         for row in payload["places"]
     )

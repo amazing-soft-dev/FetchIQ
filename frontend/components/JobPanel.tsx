@@ -5,8 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { exportHref, getJob, postJobAction } from "../lib/api";
-import type { Job, JobStatus } from "../lib/types";
+import { exportHref, getAnalysis, getJob, postJobAction } from "../lib/api";
+import type { Job, JobStatus, SearchAnalysis } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -26,10 +26,43 @@ const tone: Record<JobStatus, string> = {
 export function JobPanel({ jobId }: { jobId: string }) {
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
+  const [analysis, setAnalysis] = useState<{
+    jobId: string;
+    report: SearchAnalysis;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [includeNoContact, setIncludeNoContact] = useState(true);
   const [busy, setBusy] = useState(false);
   const keepError = useRef(false);
+  const requestedAnalysis = useRef<string | null>(null);
+  const shownAnalysis = analysis?.jobId === jobId ? analysis.report : null;
+  const status = job?.status;
+
+  useEffect(() => {
+    if (!status || requestedAnalysis.current === jobId) {
+      return;
+    }
+    const terminal: JobStatus[] = ["succeeded", "incomplete", "failed", "cancelled"];
+    if (!terminal.includes(status)) {
+      return;
+    }
+    requestedAnalysis.current = jobId;
+    let cancelled = false;
+    void getAnalysis(jobId)
+      .then((report) => {
+        if (!cancelled) {
+          setAnalysis({ jobId, report });
+        }
+      })
+      .catch(() => {
+        if (!cancelled && requestedAnalysis.current === jobId) {
+          requestedAnalysis.current = null;
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, jobId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +168,62 @@ export function JobPanel({ jobId }: { jobId: string }) {
             </ul>
           ) : null}
           {job.error ? <p className="mt-4 text-sm text-danger">{job.error}</p> : null}
+          {job.overlap_preview && job.overlap_preview.fresh > 0 && job.status === "queued" ? (
+            <div className="mt-4 rounded-control border border-line bg-header px-3 py-3 text-sm">
+              <p>
+                {job.overlap_preview.fresh} matching profiles were checked in the last 14 days.
+                Start is what spends the GitHub requests. You can widen the account age or pick
+                another country instead.
+              </p>
+              <ul className="mt-2 list-disc pl-5 text-muted">
+                {job.overlap_preview.jobs.map((earlier) => (
+                  <li key={earlier.id}>
+                    <Link href={`/jobs/${earlier.id}`}>{earlier.id}</Link>: {earlier.matched} of{" "}
+                    {earlier.live} profiles match a country in this search, {earlier.fresh} checked
+                    recently.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {shownAnalysis ? (
+            <div className="mt-4 text-sm">
+              <p>{shownAnalysis.headline}</p>
+              <p className="mt-2 text-muted">
+                Slots used {shownAnalysis.slots} of {shownAnalysis.limit}. New {shownAnalysis.inserted}
+                {shownAnalysis.updated === null ? "" : `, updated ${shownAnalysis.updated}`}.
+                {shownAnalysis.duplicates === null
+                  ? ""
+                  : ` Duplicates with nothing new: ${shownAnalysis.duplicates}.`}
+                {shownAnalysis.shortfall > 0 ? ` Shortfall ${shownAnalysis.shortfall}.` : ""}
+                {shownAnalysis.moved_out !== null && shownAnalysis.moved_out > 0
+                  ? ` ${shownAnalysis.moved_out} profiles have since moved to a later search.`
+                  : ""}
+              </p>
+              {shownAnalysis.places_unknown > 0 ? (
+                <p className="mt-2 text-muted">
+                  GitHub totals are known for {shownAnalysis.places_known} places.{" "}
+                  {shownAnalysis.places_unknown} places did not record a full-window total.
+                </p>
+              ) : null}
+              {shownAnalysis.suggestions.length > 0 ? (
+                <ul className="mt-2 list-disc pl-5 text-muted">
+                  {shownAnalysis.suggestions.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {shownAnalysis.uncollected_countries.length > 0 ? (
+                <details className="mt-2 text-muted">
+                  <summary>
+                    {shownAnalysis.uncollected_countries.length} countries have no overlapping search
+                    in this window.
+                  </summary>
+                  <p className="mt-1">{shownAnalysis.uncollected_countries.join(", ")}</p>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
             {job.status === "queued" ? (
               <Button type="button" disabled={busy} onClick={() => void act("start")}>

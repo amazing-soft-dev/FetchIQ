@@ -164,6 +164,10 @@ export function SearchForm() {
     setError(null);
     try {
       const job = await createJob(next);
+      if ((job.overlap_preview?.fresh ?? 0) > 0) {
+        router.push(`/jobs/${job.id}`);
+        return;
+      }
       await startJob(job.id);
       router.push(`/jobs/${job.id}`);
     } catch (reason) {
