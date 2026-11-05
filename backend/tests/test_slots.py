@@ -1,6 +1,14 @@
 """Pure slot allocation."""
 
-from app.slots import distribute, equal_shares, reallocate, unread
+from app.slots import (
+    DUPLICATE_PAGE_LIMIT,
+    can_fetch,
+    distribute,
+    equal_shares,
+    note_page_yield,
+    reallocate,
+    unread,
+)
 
 
 def _cursor(**overrides):
@@ -37,3 +45,23 @@ def test_pooled_slots_follow_yield_after_a_page() -> None:
 def test_distribute_assigns_every_slot() -> None:
     assert sum(distribute(10, [1.0, 3.0])) == 10
     assert distribute(10, [0.0, 0.0]) == [0, 0]
+
+
+def test_a_location_survives_its_first_duplicate_pages() -> None:
+    cursor = _cursor(share=10)
+    for _ in range(DUPLICATE_PAGE_LIMIT - 1):
+        note_page_yield(cursor, fetched=100, slots=0)
+        assert can_fetch(cursor, stop_duplicates=True) is True
+    note_page_yield(cursor, fetched=100, slots=0)
+    assert can_fetch(cursor, stop_duplicates=True) is False
+    assert can_fetch(cursor, stop_duplicates=False) is True
+
+
+def test_a_page_with_a_slot_resets_the_duplicate_run() -> None:
+    cursor = _cursor(share=10)
+    note_page_yield(cursor, fetched=100, slots=0)
+    note_page_yield(cursor, fetched=100, slots=0)
+    note_page_yield(cursor, fetched=100, slots=1)
+    assert cursor["zero_pages"] == 0
+    note_page_yield(cursor, fetched=0, slots=0)
+    assert cursor["zero_pages"] == 0

@@ -17,6 +17,7 @@ from app.github import GitHubClient
 from app.main import create_app
 from app.models import AccountAge, SearchCriteria
 from app.runner import JobRunner
+from app.slots import DUPLICATE_PAGE_LIMIT
 from conftest import FakeAuth
 
 CREATED = re.compile(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})")
@@ -1149,10 +1150,11 @@ async def test_zero_yield_does_not_open_overflow(db) -> None:
         raise AssertionError("a duplicate-only location should not be fetched again")
 
     cursor = _blank_cursor("Berlin", "2024-06-15", "2024-06-15", 10, "primary")
-    cursor["fetched"] = 4
-    cursor["duplicate"] = 4
+    cursor["fetched"] = 300
+    cursor["fresh"] = 300
+    cursor["zero_pages"] = DUPLICATE_PAGE_LIMIT
     job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=10))
-    job["overlap_preview"] = {"fresh": 4, "jobs": []}
+    job["overlap_preview"] = {"fresh": 300, "jobs": []}
     job["checkpoint"] = {
         "phase": "discovery",
         "mode": "allocate",
@@ -1197,3 +1199,92 @@ def test_overflow_names_follow_population_and_stay_inside_the_state(monkeypatch)
     monkeypatch.setattr("app.discovery.location_seeds", lambda _criteria: ["Houston", "Texas"])
     names = overflow_names(SearchCriteria(countries=["United States"], us_states=["Texas"]))
     assert names == ["Dallas", "Austin"]
+
+
+@pytest.mark.asyncio
+async def test_a_page_of_recent_profiles_does_not_drop_the_location(db) -> None:
+    """The first page repeats what an earlier search read. The next page is new."""
+
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/search/users":
+            return httpx.Response(404, json={"message": "Not Found"})
+        page = int(request.url.params.get("page", "1"))
+        pages.append(page)
+        if page == 1:
+            params = dict(request.url.params)
+            params["page"] = "2"
+            next_url = request.url.copy_with(params=params)
+            return httpx.Response(
+                200,
+                headers={"Link": f'<{next_url}>; rel="next"'},
+                json={"total_count": 2, "items": [_user(1, "ada")]},
+            )
+        return httpx.Response(200, json={"total_count": 2, "items": [_user(2, "grace")]})
+
+    await db.candidates.insert_one(
+        {
+            "job_id": "old",
+            "login": "ada",
+            "github_user_id": 1,
+            "country": "Germany",
+            "last_checked_at": datetime.now(UTC),
+        }
+    )
+    job = new_job_document(SearchCriteria(countries=["Germany"], candidate_limit=1))
+    job["overlap_preview"] = {"fresh": 1, "jobs": []}
+    await db.search_jobs.insert_one(job)
+    github = GitHubClient(FakeAuth(), transport=httpx.MockTransport(handler))
+    await DiscoveryService(db, github, today=date(2024, 6, 15)).run(job["_id"])
+    await github.aclose()
+    assert pages[:2] == [1, 2]
+    assert await db.candidates.count_documents({"login": "grace", "job_id": job["_id"]}) == 1
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["stop_reason"] == "limit_reached"
+    first = stored["checkpoint"]["cursors"][0]
+    assert first["fresh"] == 1
+    assert first["zero_pages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_start_is_refused_while_another_job_searches_the_same_country(db) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a refused start must not reach GitHub")
+
+    running = new_job_document(SearchCriteria(countries=["Brazil", "Chile"], candidate_limit=10))
+    running["status"] = "running"
+    await db.search_jobs.insert_one(running)
+    app, _runner, github = _stack(db, handler)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/jobs", json={"criteria": _criteria(countries=["Brazil"])}
+            )
+            assert created.status_code == 201
+            job_id = created.json()["id"]
+            started = await client.post(f"/api/jobs/{job_id}/start")
+            assert started.status_code == 409
+            detail = started.json()["detail"]
+            assert running["_id"] in detail
+            assert "Brazil" in detail
+            assert "Chile" not in detail
+            assert (await client.get(f"/api/jobs/{job_id}")).json()["status"] == "queued"
+    await github.aclose()
+
+
+@pytest.mark.asyncio
+async def test_other_countries_and_finished_jobs_do_not_block_a_start(db) -> None:
+    from app.routes.jobs import running_country_conflict
+
+    running = new_job_document(SearchCriteria(countries=["Chile"], candidate_limit=10))
+    running["status"] = "running"
+    finished = new_job_document(SearchCriteria(countries=["Brazil"], candidate_limit=10))
+    finished["status"] = "succeeded"
+    paused = new_job_document(SearchCriteria(countries=["Brazil"], candidate_limit=10))
+    paused["status"] = "paused"
+    await db.search_jobs.insert_many([running, finished, paused])
+    job = new_job_document(SearchCriteria(countries=["Brazil"], candidate_limit=10))
+    assert await running_country_conflict(db, job) is None
+    assert await running_country_conflict(db, running) is None

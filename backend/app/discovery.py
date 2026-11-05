@@ -21,7 +21,14 @@ from app.github import (
 )
 from app.models import SearchCriteria
 from app.places import KIND_ORDER, Place, places_for_country
-from app.slots import can_fetch, equal_shares, reallocate, taken
+from app.slots import (
+    can_fetch,
+    equal_shares,
+    note_page_yield,
+    only_duplicates,
+    reallocate,
+    taken,
+)
 
 SEARCH_RESULT_CAP = 1000
 PAGE_SIZE = 100
@@ -377,6 +384,7 @@ def _blank_cursor(location: str, start: str, end: str, share: int, wave: str) ->
         "incomplete_tries": 0,
         "total_unknown": False,
         "noted": False,
+        "zero_pages": 0,
     }
 
 
@@ -417,6 +425,7 @@ def _apply_tally(cursor: dict[str, Any], tally: PageTally) -> None:
     cursor["duplicate"] = int(cursor.get("duplicate") or 0) + tally.duplicate
     cursor["fresh"] = int(cursor.get("fresh") or 0) + tally.fresh
     cursor["has_email"] = int(cursor.get("has_email") or 0) + tally.has_email
+    note_page_yield(cursor, fetched=tally.fetched, slots=tally.slots)
 
 
 def _remember_reported(cursor: dict[str, Any], total: int, *, full: bool, unknown: bool) -> None:
@@ -458,12 +467,7 @@ def _select_cursor(
     for cursor in cursors:
         if can_fetch(cursor, stop_duplicates=stop_duplicates):
             return cursor
-        if (
-            stop_duplicates
-            and not cursor.get("exhausted")
-            and int(cursor.get("fetched") or 0) > 0
-            and taken(cursor) == 0
-        ):
+        if stop_duplicates and not cursor.get("exhausted") and only_duplicates(cursor):
             cursor["exhausted"] = True
     return None
 
