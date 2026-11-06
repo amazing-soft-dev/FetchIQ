@@ -48,9 +48,18 @@ jobs:
         run: python -m ruff check . && python -m ruff format --check .
 
       - name: Pytest
-        run: python -m pytest
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml
         env:
           DATABASE_NAME: fetchiq_test
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-coverage-py${{ matrix.python }}
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   frontend:
     name: Frontend
