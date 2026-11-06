@@ -134,6 +134,23 @@ class CampaignRunner:
             await self._sweeper
         self._sweeper = None
 
+    async def shutdown(self) -> None:
+        """Stop the sweeper and cancel in-flight runs.
+
+        A cancelled run leaves its document running with this worker's lease; the
+        lease lapses and the next process, or this one restarted, resumes it from
+        its checkpoint. Without this, a run could keep writing after the process
+        decided to stop.
+        """
+
+        await self.stop_sweeper()
+        pending = [task for task in self._tasks.values() if not task.done()]
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            with suppress(asyncio.CancelledError):
+                await task
+
     async def _sweep(self, interval: float) -> None:
         while True:
             await asyncio.sleep(interval)
