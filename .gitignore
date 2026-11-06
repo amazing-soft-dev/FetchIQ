@@ -45,6 +45,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+backend/openapi.json
 *.cover
 *.py.cover
 *.lcov

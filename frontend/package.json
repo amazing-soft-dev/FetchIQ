@@ -9,7 +9,8 @@
     "build": "next build",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "types": "npx -y -p typescript@5.9.3 -p openapi-typescript@7.13.0 openapi-typescript ../backend/openapi.json -o lib/api-types.ts"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.4.1",

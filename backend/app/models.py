@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.geo import UNITED_STATES, canonical_country, canonical_state
 
@@ -18,6 +18,11 @@ JobStatus = Literal[
 
 
 class AccountAge(BaseModel):
+    # Every field is present on the way out, so the response schema (and the
+    # TypeScript generated from it) marks them required; the request schema keeps
+    # its defaults.
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     min_years: int = Field(default=0, ge=0, le=100)
     min_months: int = Field(default=0, ge=0, le=11)
     max_years: int = Field(default=5, ge=0, le=100)
@@ -33,6 +38,11 @@ class AccountAge(BaseModel):
 
 
 class SearchCriteria(BaseModel):
+    # Every field is present on the way out, so the response schema (and the
+    # TypeScript generated from it) marks them required; the request schema keeps
+    # its defaults.
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     countries: list[str] = Field(default_factory=list)
     us_states: list[str] = Field(default_factory=list)
     account_age: AccountAge = Field(default_factory=AccountAge)

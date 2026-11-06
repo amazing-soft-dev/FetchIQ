@@ -25,6 +25,7 @@ const job: Job = {
   incomplete: false,
   incomplete_reasons: [],
   counts: { discovered: 3, enriched: 1, errors: 0, emails: 1, linkedin_without_email: 0 },
+  request_budget: { limit: null, remaining: null, reset_at: null, retry_after_seconds: null },
   overlap_preview: null,
   error: null,
   created_at: null,
