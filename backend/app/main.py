@@ -7,12 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.campaigns import CampaignRunner
 from app.config import Settings
-from app.contacts import backfill_contact_filters
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
 from app.github_auth import GitHubAppAuth
 from app.logs import configure_logging
 from app.mail import Mailer, SmtpMailer
+from app.migrations import run_migrations
 from app.routes.campaigns import router as campaigns_router
 from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
@@ -58,7 +58,6 @@ def create_app(
             app_github = GitHubClient(auth, base_url=settings.github_api_base)
             owns_github = True
         if db is not None:
-            await ensure_indexes(db)
             app.state.db = db
             app.state.mongo_client = None
         else:
@@ -66,8 +65,9 @@ def create_app(
             owns_client = True
             app.state.mongo_client = client
             app.state.db = database
+        await run_migrations(app.state.db)
+        await ensure_indexes(app.state.db)
         app.state.github = app_github
-        await backfill_contact_filters(app.state.db)
         app.state.runner = runner or JobRunner(app.state.db, app.state.github)
         await app.state.runner.resume_running()
         app.state.mailer = mailer or SmtpMailer(settings)
