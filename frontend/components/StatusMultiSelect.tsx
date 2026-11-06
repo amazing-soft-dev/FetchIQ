@@ -22,8 +22,9 @@ function summary(value: string[], labels: Map<string, string>): string {
   if (value.length === 0) {
     return "Any";
   }
-  if (value.length === 1) {
-    return labels.get(value[0]) ?? value[0];
+  const [only] = value;
+  if (value.length === 1 && only !== undefined) {
+    return labels.get(only) ?? only;
   }
   return `${value.length} statuses`;
 }
