@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 
 from app.db import utcnow
 from app.discovery import DiscoveryService
 from app.enrichment import EnrichmentService
 from app.github import RATE_LIMIT_STEP_SECONDS, GitHubClient
+from app.lease import SWEEP_SECONDS, claim_stale, forget, heartbeat, lease_fields
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ class JobRunner:
         self.github = github
         self.sleeper = sleeper or asyncio.sleep
         self._tasks: dict[str, asyncio.Task] = {}
+        self._sweeper: asyncio.Task | None = None
 
     async def kick(self, job_id: str) -> None:
         job = await self.db.search_jobs.find_one({"_id": job_id})
@@ -39,6 +42,7 @@ class JobRunner:
                     "control": None,
                     "error": None,
                     "updated_at": utcnow(),
+                    **lease_fields(),
                 }
             },
         )
@@ -49,7 +53,7 @@ class JobRunner:
         self._tasks[job_id] = asyncio.create_task(self._run(job_id))
 
     async def resume_running(self) -> None:
-        """Continue jobs left running when the process stopped before enrichment."""
+        """Take over running jobs whose lease has lapsed. Held ones are left alone."""
 
         cursor = self.db.search_jobs.find({"status": "running"}, {"_id": 1})
         async for job in cursor:
@@ -57,8 +61,32 @@ class JobRunner:
             current = self._tasks.get(job_id)
             if current is not None and not current.done():
                 continue
-            log.info("job resumed after restart", extra={"job_id": job_id})
+            if await claim_stale(self.db.search_jobs, job_id) is None:
+                continue
+            log.info("job resumed after lease lapse", extra={"job_id": job_id})
             self._tasks[job_id] = asyncio.create_task(self._run(job_id))
+
+    def start_sweeper(self, interval: float = SWEEP_SECONDS) -> None:
+        """Look for lapsed leases every ``interval`` seconds until stopped."""
+
+        if self._sweeper is None or self._sweeper.done():
+            self._sweeper = asyncio.create_task(self._sweep(interval))
+
+    async def stop_sweeper(self) -> None:
+        if self._sweeper is None:
+            return
+        self._sweeper.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._sweeper
+        self._sweeper = None
+
+    async def _sweep(self, interval: float) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.resume_running()
+            except Exception:
+                log.exception("lease sweep failed")
 
     async def _control(self, job_id: str) -> str | None:
         job = await self.db.search_jobs.find_one({"_id": job_id}, {"control": 1})
@@ -110,6 +138,7 @@ class JobRunner:
             step = min(RATE_LIMIT_STEP_SECONDS, remaining)
             await self.sleeper(step)
             remaining = max(0.0, remaining - step)
+            await heartbeat(self.db.search_jobs, job_id)
         if wait > 0:
             await self.db.search_jobs.update_one(
                 {"_id": job_id},
@@ -118,6 +147,12 @@ class JobRunner:
         return True
 
     async def _run(self, job_id: str) -> None:
+        try:
+            await self._run_leased(job_id)
+        finally:
+            forget(job_id)
+
+    async def _run_leased(self, job_id: str) -> None:
         try:
             if not await self._wait_for_budget(job_id):
                 return

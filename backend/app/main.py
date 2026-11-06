@@ -71,13 +71,17 @@ def create_app(
         app.state.github = app_github
         app.state.runner = runner or JobRunner(app.state.db, app.state.github)
         await app.state.runner.resume_running()
+        app.state.runner.start_sweeper()
         app.state.mailer = mailer or SmtpMailer(settings)
         app.state.campaigns = campaigns or CampaignRunner(app.state.db, app.state.mailer)
         await app.state.campaigns.resume_running()
         await app.state.campaigns.copy_sent()
         await app.state.campaigns.recover_connection_failures()
+        app.state.campaigns.start_sweeper()
         yield
         log.info("api stopping")
+        await app.state.runner.stop_sweeper()
+        await app.state.campaigns.stop_sweeper()
         if owns_github:
             await app.state.github.aclose()
         if owns_client and app.state.mongo_client is not None:

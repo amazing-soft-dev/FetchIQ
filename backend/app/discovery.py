@@ -21,6 +21,7 @@ from app.github import (
     read_budget,
     wait_out_rate_limit,
 )
+from app.lease import heartbeat
 from app.models import SearchCriteria
 from app.places import KIND_ORDER, Place, places_for_country
 from app.slots import (
@@ -1096,6 +1097,7 @@ class DiscoveryService:
         )
 
         async def stopped() -> str | None:
+            await heartbeat(self.db.search_jobs, job_id)
             return await self._control(job_id)
 
         reason, remaining = await wait_out_rate_limit(exc.retry_after, self.sleeper, stopped)
@@ -1136,6 +1138,7 @@ class DiscoveryService:
             {"_id": job_id},
             {"$set": {"checkpoint": checkpoint, "updated_at": utcnow()}},
         )
+        await heartbeat(self.db.search_jobs, job_id)
 
     async def _event(self, job_id: str, kind: str, message: str, detail: dict) -> None:
         await self.db.job_events.insert_one(

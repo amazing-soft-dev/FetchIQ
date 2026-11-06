@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from pymongo import ReturnDocument
 
 from app.contacts import candidate_user_ids, contact_facts, evidence_by_user, evidence_for
 from app.db import utcnow
+from app.lease import SWEEP_SECONDS, WORKER_ID, claim_stale, forget, heartbeat, lease_fields
 from app.mail import (
     CONNECTION_ERROR,
     DEFERRED_ERROR,
@@ -73,6 +75,7 @@ class CampaignRunner:
         self.clock = clock or utcnow
         self.rng = rng or random.random
         self._tasks: dict[str, asyncio.Task] = {}
+        self._sweeper: asyncio.Task | None = None
         self._connection_waits: dict[str, int] = {}
 
     async def kick(self, campaign_id: str) -> None:
@@ -89,6 +92,7 @@ class CampaignRunner:
                     "control": None,
                     "error": None,
                     "updated_at": self.clock(),
+                    **lease_fields(self.clock()),
                 }
             },
         )
@@ -102,7 +106,7 @@ class CampaignRunner:
         self._tasks[campaign_id] = asyncio.create_task(self._run(campaign_id))
 
     async def resume_running(self) -> None:
-        """Continue a campaign left running when the process stopped."""
+        """Take over running campaigns whose lease has lapsed. Held ones are left alone."""
 
         cursor = self.db.campaigns.find({"status": "running"}, {"_id": 1})
         async for campaign in cursor:
@@ -110,9 +114,40 @@ class CampaignRunner:
             current = self._tasks.get(campaign_id)
             if current is not None and not current.done():
                 continue
+            if await claim_stale(self.db.campaigns, campaign_id, now=self.clock()) is None:
+                continue
+            log.info("campaign resumed after lease lapse", extra={"campaign_id": campaign_id})
             self._tasks[campaign_id] = asyncio.create_task(self._run(campaign_id))
 
+    def start_sweeper(self, interval: float = SWEEP_SECONDS) -> None:
+        """Look for lapsed leases every ``interval`` seconds until stopped."""
+
+        if self._sweeper is None or self._sweeper.done():
+            self._sweeper = asyncio.create_task(self._sweep(interval))
+
+    async def stop_sweeper(self) -> None:
+        if self._sweeper is None:
+            return
+        self._sweeper.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._sweeper
+        self._sweeper = None
+
+    async def _sweep(self, interval: float) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.resume_running()
+            except Exception:
+                log.exception("lease sweep failed")
+
     async def _run(self, campaign_id: str) -> None:
+        try:
+            await self._run_leased(campaign_id)
+        finally:
+            forget(campaign_id)
+
+    async def _run_leased(self, campaign_id: str) -> None:
         try:
             await self._fail_interrupted(campaign_id)
             while True:
@@ -150,6 +185,7 @@ class CampaignRunner:
         )
 
     async def _stopped(self, campaign_id: str) -> bool:
+        await heartbeat(self.db.campaigns, campaign_id)
         campaign = await self.db.campaigns.find_one({"_id": campaign_id}, {"control": 1})
         control = (campaign or {}).get("control")
         if control == "cancel":
@@ -334,6 +370,11 @@ class CampaignRunner:
             if copied_at is not None:
                 fields["copied_at"] = copied_at
         await self.db.campaign_recipients.update_one({"_id": recipient_id}, {"$set": fields})
+        campaign = await self.db.campaign_recipients.find_one(
+            {"_id": recipient_id}, {"campaign_id": 1}
+        )
+        if campaign is not None:
+            await heartbeat(self.db.campaigns, campaign["campaign_id"])
 
     async def recover_connection_failures(self) -> None:
         """Pause a campaign stopped by a dropped connection and requeue that send.
@@ -429,9 +470,13 @@ class CampaignRunner:
 
 
 async def queue_campaign(db, body) -> dict:
-    """Store one campaign. Contacts without a public email are skipped, not queued."""
+    """Store one campaign. Contacts without a public email are skipped, not queued.
 
-    active = await db.campaigns.count_documents({"status": {"$in": list(ACTIVE)}})
+    One campaign at a time per worker: an active campaign held by this process, or
+    not yet claimed by any, blocks a new one. Campaigns held by other workers do not.
+    """
+
+    active = await db.campaigns.count_documents(_blocking_campaigns())
     if active:
         raise CampaignBusy("A message send is already in progress.")
     now = utcnow()
@@ -481,13 +526,20 @@ async def queue_campaign(db, body) -> dict:
     await db.campaigns.insert_one(campaign)
     await db.campaign_recipients.insert_many(rows)
     others = await db.campaigns.count_documents(
-        {"_id": {"$ne": campaign_id}, "status": {"$in": list(ACTIVE)}}
+        {"_id": {"$ne": campaign_id}, **_blocking_campaigns()}
     )
     if others:
         await db.campaign_recipients.delete_many({"campaign_id": campaign_id})
         await db.campaigns.delete_one({"_id": campaign_id})
         raise CampaignBusy("A message send is already in progress.")
     return campaign
+
+
+def _blocking_campaigns() -> dict:
+    return {
+        "status": {"$in": list(ACTIVE)},
+        "$or": [{"worker_id": WORKER_ID}, {"worker_id": None}],
+    }
 
 
 def _recipient(
