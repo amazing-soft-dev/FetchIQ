@@ -56,7 +56,7 @@ npm run build
 
 GitHub Actions runs these same checks on pull requests and pushes to `dev` and `main`. The workflow is [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- **Backend:** Python 3.12, install `backend/requirements.txt`, Ruff, pytest against the in-memory database name `fetchiq_test`.
+- **Backend:** Python 3.12, 3.13 and 3.14 (one job per version), install `backend/requirements.txt`, Ruff, pytest against the in-memory database name `fetchiq_test`.
 - **Frontend:** Node 24 (also pinned in `frontend/.nvmrc` and the `engines` field), `npm ci`, typecheck, lint, and `next build`.
 
 The workflow token can read repository contents only. Third-party actions are pinned to commit SHAs. Dependabot opens weekly update pull requests for GitHub Actions, pip, and npm. Those pull requests are not merged automatically.
