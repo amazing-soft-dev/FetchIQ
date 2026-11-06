@@ -107,7 +107,7 @@ async def overlapping_jobs(db, document: dict[str, Any]) -> list[dict[str, Any]]
         },
     )
     chosen: list[dict[str, Any]] = []
-    for earlier in await cursor.to_list(None):
+    async for earlier in cursor:
         if earlier.get("_id") == document.get("_id"):
             continue
         if not countries.intersection(_countries(earlier)):
@@ -137,13 +137,13 @@ async def _overlap_rows(
         return []
     countries = set(_countries(document))
     ids = [item["_id"] for item in earlier]
-    found = await db.candidates.find(
+    found = db.candidates.find(
         {"job_id": {"$in": ids}},
         {"job_id": 1, "country": 1, "last_checked_at": 1},
-    ).to_list(None)
+    )
     stats: dict[str, dict[str, int]] = {}
     cutoff = _aware(fresh_cutoff)
-    for candidate in found:
+    async for candidate in found:
         job_id = candidate.get("job_id")
         if not isinstance(job_id, str):
             continue
@@ -385,7 +385,9 @@ async def build_analysis(db, document: dict[str, Any]) -> dict[str, Any]:
 
     checkpoint = document.get("checkpoint") or {}
     caps = list(checkpoint.get("caps") or [])
-    events = await db.job_events.find({"job_id": document["_id"], "kind": "split"}).to_list(None)
+    # One event per window split, so this list is bounded by the job's own windows.
+    split_events = db.job_events.find({"job_id": document["_id"], "kind": "split"})
+    events = [event async for event in split_events]
     if checkpoint.get("cursors"):
         places = _cursor_places(checkpoint)
         unknown = sum(1 for place in places if place.get("reported") is None)
