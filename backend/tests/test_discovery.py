@@ -6,8 +6,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
+from app.counts import recount_jobs
 from app.discovery import (
     DiscoveryService,
+    PageTally,
     build_user_query,
     location_seeds,
     new_job_document,
@@ -123,7 +125,7 @@ def test_criteria_rejects_reversed_age_unknown_places_and_states_without_us() ->
 async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -> None:
     job = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(job)
-    first, _source = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    first, _source, _moved = await upsert_candidate(db, job["_id"], _user(7, "ada"))
     await db.candidates.update_one(
         {"login": "ada"},
         {
@@ -137,7 +139,7 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
             }
         },
     )
-    second, _source = await upsert_candidate(db, job["_id"], _user(7, "ada"))
+    second, _source, _moved = await upsert_candidate(db, job["_id"], _user(7, "ada"))
     assert first == "inserted"
     assert second == "duplicate"
     same = await db.candidates.find_one({"login": "ada"})
@@ -153,9 +155,12 @@ async def test_upsert_overwrites_existing_username_without_a_new_discovery(db) -
 
     other = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(other)
-    moved_outcome, moved_from = await upsert_candidate(db, other["_id"], _user(8, "ada"))
+    moved_outcome, moved_from, moved_share = await upsert_candidate(
+        db, other["_id"], _user(8, "ada")
+    )
     assert moved_outcome == "updated"
     assert moved_from == job["_id"]
+    assert moved_share == {"discovered": 1, "enriched": 1, "emails": 0, "linkedin_without_email": 0}
     moved = await db.candidates.find_one({"login": "ada"})
     assert moved["job_id"] == other["_id"]
     assert moved["github_user_id"] == 7
@@ -187,7 +192,7 @@ async def test_recent_profile_is_left_unchanged(db) -> None:
     )
     other = new_job_document(SearchCriteria(countries=["Germany"]))
     await db.search_jobs.insert_one(other)
-    outcome, _source = await upsert_candidate(db, other["_id"], _user(8, "ada"))
+    outcome, _source, _moved = await upsert_candidate(db, other["_id"], _user(8, "ada"))
     assert outcome == "fresh"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
@@ -219,7 +224,7 @@ async def _stored_profile(db, *, age_days: int, email: str | None) -> tuple[dict
 @pytest.mark.asyncio
 async def test_profile_checked_within_two_weeks_is_skipped_even_without_an_email(db) -> None:
     job, other = await _stored_profile(db, age_days=13, email=None)
-    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    outcome, _source, _moved = await upsert_candidate(db, other["_id"], _user(7, "ada"))
     assert outcome == "fresh"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
@@ -229,7 +234,7 @@ async def test_profile_checked_within_two_weeks_is_skipped_even_without_an_email
 @pytest.mark.asyncio
 async def test_old_profile_with_an_email_is_skipped(db) -> None:
     job, other = await _stored_profile(db, age_days=30, email="ada@example.com")
-    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    outcome, _source, _moved = await upsert_candidate(db, other["_id"], _user(7, "ada"))
     assert outcome == "has_email"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == job["_id"]
@@ -240,7 +245,7 @@ async def test_old_profile_with_an_email_is_skipped(db) -> None:
 @pytest.mark.asyncio
 async def test_old_profile_without_an_email_is_searched_again(db) -> None:
     _job, other = await _stored_profile(db, age_days=15, email=None)
-    outcome, _source = await upsert_candidate(db, other["_id"], _user(7, "ada"))
+    outcome, _source, _moved = await upsert_candidate(db, other["_id"], _user(7, "ada"))
     assert outcome == "updated"
     stored = await db.candidates.find_one({"login": "ada"})
     assert stored["job_id"] == other["_id"]
@@ -679,13 +684,24 @@ async def test_job_payload_counts_emails_and_linkedin_without_email(db) -> None:
             await db.contact_evidence.insert_one(
                 {"github_user_id": 99, "kind": "email", "normalized_value": "other@example.com"}
             )
+            await recount_jobs(db)
             payload = (await client.get(f"/api/jobs/{job_id}")).json()
+            other_payload = (await client.get(f"/api/jobs/{other['_id']}")).json()
     await github.aclose()
 
     assert payload["counts"]["emails"] == 3
     assert payload["counts"]["linkedin_without_email"] == 1
     assert payload["counts"]["discovered"] == 3
     assert payload["counts"]["enriched"] == 0
+    assert other_payload["counts"] == {
+        "discovered": 1,
+        "enriched": 0,
+        "errors": 0,
+        "emails": 1,
+        "linkedin_without_email": 0,
+    }
+    grace = await db.candidates.find_one({"login": "grace"})
+    assert grace["counted"] == {"emails": 0, "linkedin_without_email": 1}
 
 
 def _raise_dns_failure(request: httpx.Request) -> None:
@@ -696,7 +712,7 @@ def _raise_dns_failure(request: httpx.Request) -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_panel_counts_the_rows_on_the_job(db) -> None:
+async def test_startup_recount_replaces_stale_job_counters(db) -> None:
     job = new_job_document(SearchCriteria(countries=["Germany"]))
     job["counts"] = {"discovered": 99, "enriched": 40, "errors": 2}
     await db.search_jobs.insert_one(job)
@@ -736,7 +752,88 @@ async def test_job_panel_counts_the_rows_on_the_job(db) -> None:
     assert payload["counts"]["enriched"] == 1
     assert payload["counts"]["errors"] == 2
     stored = await db.search_jobs.find_one({"_id": job["_id"]})
-    assert stored["counts"]["discovered"] == 99
+    assert stored["counts"]["discovered"] == 2
+    assert stored["counts"]["enriched"] == 1
+
+
+@pytest.mark.asyncio
+async def test_job_poll_reads_only_the_job_document(db, monkeypatch) -> None:
+    job = new_job_document(SearchCriteria(countries=["Germany"]))
+    job["counts"] = {
+        "discovered": 3,
+        "enriched": 2,
+        "errors": 1,
+        "emails": 2,
+        "linkedin_without_email": 1,
+    }
+    await db.search_jobs.insert_one(job)
+    app, _runner, github = _stack(
+        db,
+        lambda _request: httpx.Response(500, json={"message": "should not be called"}),
+    )
+    transport = ASGITransport(app=app)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a job poll must not read candidates or evidence")
+
+    async with app.router.lifespan_context(app):
+        # Startup recounts every job; set the counters this poll must echo after that.
+        await db.search_jobs.update_one({"_id": job["_id"]}, {"$set": {"counts": job["counts"]}})
+        for collection in (db.candidates, db.contact_evidence):
+            for method in ("find", "find_one", "count_documents", "aggregate", "distinct"):
+                monkeypatch.setattr(collection, method, refuse)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/api/jobs/{job['_id']}")
+    await github.aclose()
+
+    assert response.status_code == 200
+    assert response.json()["counts"] == job["counts"]
+
+
+@pytest.mark.asyncio
+async def test_a_moved_candidate_carries_its_counter_share(db) -> None:
+    first = new_job_document(SearchCriteria(countries=["Germany"]))
+    second = new_job_document(SearchCriteria(countries=["Germany"]))
+    first["counts"] = {
+        "discovered": 1,
+        "enriched": 1,
+        "errors": 0,
+        "emails": 0,
+        "linkedin_without_email": 1,
+    }
+    await db.search_jobs.insert_many([first, second])
+    await db.candidates.insert_one(
+        {
+            "job_id": first["_id"],
+            "github_user_id": 7,
+            "login": "ada",
+            "enrichment_status": "enriched",
+            "public_email": None,
+            "last_checked_at": datetime(2020, 1, 1, tzinfo=UTC),
+            "counted": {"emails": 0, "linkedin_without_email": 1},
+        }
+    )
+
+    tally = PageTally()
+    tally.add(*await upsert_candidate(db, second["_id"], _user(7, "ada")))
+    tally.add(*await upsert_candidate(db, second["_id"], _user(8, "grace")))
+    await DiscoveryService(db, None)._flush_tally(second["_id"], tally, {})
+
+    lost = await db.search_jobs.find_one({"_id": first["_id"]})
+    gained = await db.search_jobs.find_one({"_id": second["_id"]})
+    assert lost["counts"] == {
+        "discovered": 0,
+        "enriched": 0,
+        "errors": 0,
+        "emails": 0,
+        "linkedin_without_email": 0,
+    }
+    assert lost["funnel"]["moved_out"] == 1
+    assert gained["counts"]["discovered"] == 2
+    assert gained["counts"]["enriched"] == 0
+    assert gained["counts"]["linkedin_without_email"] == 1
+    assert gained["funnel"]["moved_in"] == 1
+    assert gained["funnel"]["inserted"] == 1
 
 
 @pytest.mark.asyncio
