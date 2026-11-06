@@ -2,9 +2,10 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import require_token
 from app.campaigns import CampaignRunner
 from app.config import Settings
 from app.db import connect, ensure_indexes
@@ -90,10 +91,11 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(jobs_router)
-    app.include_router(contacts_router)
-    app.include_router(presets_router)
-    app.include_router(campaigns_router)
+    guard = [Depends(require_token)]
+    app.include_router(jobs_router, dependencies=guard)
+    app.include_router(contacts_router, dependencies=guard)
+    app.include_router(presets_router, dependencies=guard)
+    app.include_router(campaigns_router, dependencies=guard)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { errorMessage } from "./api";
 
@@ -40,5 +40,45 @@ describe("errorMessage", () => {
     expect(await errorMessage(response(JSON.stringify({ error: "x" }), 403))).toBe(
       "Request failed (403)",
     );
+  });
+});
+
+async function loadApi(token: string) {
+  vi.stubEnv("NEXT_PUBLIC_API_TOKEN", token);
+  vi.resetModules();
+  return import("./api");
+}
+
+function stubFetch(body: unknown): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(
+    async () => new Response(JSON.stringify(body), { status: 200 }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+describe("API token", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("sends a bearer header and a token query on export links when set", async () => {
+    const api = await loadApi(" abc ");
+    const fetchMock = stubFetch({ jobs: [] });
+    await api.listJobs();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer abc");
+    expect(api.exportHref("j1", true)).toBe("/api/jobs/j1/export.csv?include_no_contact=true&token=abc");
+  });
+
+  it("sends nothing extra when the token is empty", async () => {
+    const api = await loadApi("");
+    const fetchMock = stubFetch({ jobs: [] });
+    await api.listJobs();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("Authorization");
+    expect(api.exportHref("j1", false)).toBe("/api/jobs/j1/export.csv?include_no_contact=false");
   });
 });
