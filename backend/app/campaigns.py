@@ -1,6 +1,7 @@
 """Mongo-backed campaign queue. One recipient is sent at a time, off the request."""
 
 import asyncio
+import logging
 import random
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,8 @@ from app.mail import (
     placeholder_values,
     render_template,
 )
+
+log = logging.getLogger(__name__)
 
 ACTIVE = frozenset({"queued", "running", "paused"})
 WAIT_STEP_SECONDS = 5.0
@@ -84,6 +87,10 @@ class CampaignRunner:
                     "updated_at": self.clock(),
                 }
             },
+        )
+        log.info(
+            "campaign running",
+            extra={"campaign_id": campaign_id, "previous_status": campaign["status"]},
         )
         current = self._tasks.get(campaign_id)
         if current is not None and not current.done():
@@ -229,6 +236,16 @@ class CampaignRunner:
             )
         except MailFailure as exc:
             detail = str(exc)[:300]
+            log.warning(
+                "message failed",
+                extra={
+                    "campaign_id": campaign_id,
+                    "login": login,
+                    "connection": bool(exc.connection),
+                    "stop": bool(exc.stop),
+                    "error": detail,
+                },
+            )
             if exc.connection:
                 await self._mark(recipient["_id"], "queued", None)
                 await self.db.campaigns.update_one(
@@ -244,10 +261,18 @@ class CampaignRunner:
                 return True
             return False
         except UnknownPlaceholder as exc:
+            log.warning(
+                "message failed",
+                extra={"campaign_id": campaign_id, "login": login, "error": str(exc)[:300]},
+            )
             await self._mark(recipient["_id"], "failed", str(exc)[:300])
             await self._finish(campaign_id, "failed", str(exc)[:300])
             return True
         sent_at = self.clock()
+        log.info(
+            "message sent",
+            extra={"campaign_id": campaign_id, "login": login, "copied": copy_error is None},
+        )
         await self._mark(
             recipient["_id"],
             "sent",
@@ -392,6 +417,10 @@ class CampaignRunner:
                     "updated_at": self.clock(),
                 }
             },
+        )
+        log.info(
+            "campaign finished",
+            extra={"campaign_id": campaign_id, "status": status, "error": error},
         )
 
 

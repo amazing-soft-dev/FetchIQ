@@ -69,6 +69,8 @@ npm run dev
 
 The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
+The API writes one JSON object per line to stderr for startup, job and campaign state changes, GitHub rate-limit waits, enrichment misses, and message sends. `LOG_LEVEL` (default `INFO`) sets the level. Tokens, passwords, and recipient addresses are never logged.
+
 ## Jobs
 
 `POST /api/jobs` stores criteria and leaves the job `queued`. `POST /api/jobs/{id}/start`, `/pause`, `/resume`, and `/cancel` control the run. A 429 or rate-limit 403 waits until the GitHub rate limit resets, then continues from the same checkpoint unless the user paused or cancelled. Resume continues a paused job from that checkpoint with the same installation.
