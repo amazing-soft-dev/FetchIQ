@@ -157,8 +157,9 @@ export function ChipMultiSelect({
     if (event.key === "Enter") {
       event.preventDefault();
 
-      if (open && active >= 0) {
-        add(suggestions[active]);
+      const pick = open && active >= 0 ? suggestions[active] : undefined;
+      if (pick !== undefined) {
+        add(pick);
       }
 
       return;
