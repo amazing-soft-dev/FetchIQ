@@ -98,7 +98,9 @@ When a slice reports more than 1,000 hits, the job splits the date window. A sli
 
 The contacts page sends a plain-text message to the selected people who have a public email. That address is the recipient. The subject and body may contain `{{ first_name }}`, `{{ name }}`, `{{ login }}`, and `{{ email }}`. `first_name` is the first word of the display name, or the username when the name is missing. Any other placeholder is rejected.
 
-`POST /api/campaigns` stores the campaign and returns. A background worker sends one message at a time, waits a random delay between the campaign's minimum and maximum, and waits when the hourly limit is reached. Pause and cancel use the same control as a search job. A contact is marked Message sent after the mail server accepts the message. A second campaign cannot start while one is queued, running, or paused.
+`POST /api/campaigns` stores the campaign and returns. A background worker sends one message at a time, waits a random delay between the campaign's minimum and maximum, and waits when the hourly limit is reached. Pause and cancel use the same control as a search job. A contact is marked Message sent after the mail server accepts the message. A second campaign cannot start on the same API process while one is queued, running, or paused.
+
+A running job or campaign is leased to the process that runs it, which refreshes a heartbeat at every checkpoint and during waits. A restarted process, or a second one, takes a running document over only once that heartbeat is 90 seconds old, and checks for lapsed leases every 30 seconds, so one crash costs at most about two minutes and no job runs twice.
 
 Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SSL`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM`. The default host is `smtp.hostinger.com` on port 465. Leaving the username, password, or from address blank keeps sending disabled.
 
