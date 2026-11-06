@@ -20,7 +20,7 @@ FetchIQ authenticates to GitHub as one GitHub App installation. It signs a short
 
 ## Stack
 
-- FastAPI and Motor, database name `fetchiq`
+- FastAPI and PyMongo's async client, database name `fetchiq`
 - Next.js search UI and CSV download
 - Collections: `search_presets`, `search_jobs`, `candidates`, `contact_evidence`, `job_events`, `campaigns`, `campaign_recipients`
 
