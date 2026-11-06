@@ -1,0 +1,45 @@
+# Local development only: MongoDB, the API and the UI from one `docker compose up --build`.
+# Settings come from .env at the repository root, the same file the venv setup uses.
+# The GitHub App key named by GITHUB_APP_PRIVATE_KEY_PATH is mounted read-only into the
+# API container; it is never copied into an image.
+name: fetchiq
+
+services:
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+    volumes:
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app.pem:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        API_PROXY_TARGET: http://api:8000
+        # Baked into the client bundle; rebuild the web image after changing API_TOKEN.
+        NEXT_PUBLIC_API_TOKEN: ${API_TOKEN:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  mongo-data:
