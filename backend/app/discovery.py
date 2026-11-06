@@ -9,6 +9,7 @@ from uuid import uuid4
 from pymongo.errors import DuplicateKeyError
 
 from app.contacts import is_blank
+from app.counts import candidate_share, zero_share
 from app.dates import account_age_window, split_date_window
 from app.db import utcnow
 from app.enrichment import EnrichmentService
@@ -119,7 +120,13 @@ def new_job_document(criteria: SearchCriteria) -> dict[str, Any]:
             "reset_at": None,
             "retry_after_seconds": None,
         },
-        "counts": {"discovered": 0, "enriched": 0, "errors": 0},
+        "counts": {
+            "discovered": 0,
+            "enriched": 0,
+            "errors": 0,
+            "emails": 0,
+            "linkedin_without_email": 0,
+        },
         "funnel": {
             "inserted": 0,
             "updated": 0,
@@ -264,14 +271,17 @@ def _checked_at(value: object) -> datetime | None:
     return value
 
 
-async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> tuple[str, str | None]:
-    """Insert a username once. Return the outcome and the previous job id when one moved.
+async def upsert_candidate(
+    db, job_id: str, item: dict[str, Any]
+) -> tuple[str, str | None, dict[str, int] | None]:
+    """Insert a username once. Return the outcome, the previous job id, and the moved share.
 
     A new login is ``inserted``. An older profile with no public email is ``updated``
     and queued for a refresh. A repeat in this job is ``duplicate``. A profile checked
     within two weeks is ``fresh``. An older profile that already has a public email is
     ``has_email``. The page that fetched the user records the slot; this function does
-    not write the job counters.
+    not write the job counters. For an ``updated`` profile the third value is what it
+    added to the previous job's counters, so the page tally can move it over.
     """
 
     now = utcnow()
@@ -290,14 +300,15 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> tuple[str, 
                 "$unset": _OBSOLETE_CANDIDATE_FIELDS,
             },
         )
-        return "duplicate", None
+        return "duplicate", None, None
     if existing is not None:
         checked = _checked_at(existing.get("last_checked_at"))
         if checked is not None and checked >= now - FRESH_PROFILE:
-            return "fresh", None
+            return "fresh", None, None
         if not is_blank(existing.get("public_email")):
-            return "has_email", None
+            return "has_email", None, None
         source = existing.get("job_id")
+        moved = candidate_share(existing)
         changes: dict[str, Any] = {
             "job_id": job_id,
             "enrichment_status": "merge",
@@ -309,7 +320,7 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> tuple[str, 
             {"_id": existing["_id"]},
             {"$set": changes, "$unset": _OBSOLETE_CANDIDATE_FIELDS},
         )
-        return "updated", source if isinstance(source, str) else None
+        return "updated", source if isinstance(source, str) else None, moved
     try:
         result = await db.candidates.update_one(
             {"login": login},
@@ -321,10 +332,10 @@ async def upsert_candidate(db, job_id: str, item: dict[str, Any]) -> tuple[str, 
             upsert=True,
         )
     except DuplicateKeyError:
-        return "duplicate", None
+        return "duplicate", None, None
     if result.upserted_id is not None:
-        return "inserted", None
-    return "duplicate", None
+        return "inserted", None, None
+    return "duplicate", None, None
 
 
 class PageTally:
@@ -335,16 +346,26 @@ class PageTally:
         self.fresh = 0
         self.has_email = 0
         self.fetched = 0
-        self.sources: dict[str, int] = {}
+        # Counter shares carried in from other jobs, and what each of them lost.
+        self.moved_in = zero_share()
+        self.moved_out: dict[str, dict[str, int]] = {}
 
-    def add(self, outcome: str, source_job_id: str | None) -> None:
+    def add(
+        self, outcome: str, source_job_id: str | None, moved: dict[str, int] | None = None
+    ) -> None:
         self.fetched += 1
         if outcome == "inserted":
             self.inserted += 1
         elif outcome == "updated":
             self.updated += 1
+            share = moved or candidate_share({})
+            for key in self.moved_in:
+                if key != "enriched":
+                    self.moved_in[key] += share.get(key, 0)
             if source_job_id:
-                self.sources[source_job_id] = self.sources.get(source_job_id, 0) + 1
+                lost = self.moved_out.setdefault(source_job_id, zero_share())
+                for key in lost:
+                    lost[key] += share.get(key, 0)
         elif outcome == "fresh":
             self.fresh += 1
         elif outcome == "has_email":
@@ -949,8 +970,8 @@ class DiscoveryService:
         for item in items:
             if not isinstance(item, dict) or "id" not in item or "login" not in item:
                 continue
-            outcome, source = await upsert_candidate(self.db, job_id, item)
-            tally.add(outcome, source)
+            outcome, source, moved = await upsert_candidate(self.db, job_id, item)
+            tally.add(outcome, source, moved)
         return tally
 
     async def _flush_tally(self, job_id: str, tally: PageTally, checkpoint: dict) -> None:
@@ -959,7 +980,9 @@ class DiscoveryService:
             {
                 "$set": {"checkpoint": checkpoint, "updated_at": utcnow()},
                 "$inc": {
-                    "counts.discovered": tally.inserted,
+                    "counts.discovered": tally.inserted + tally.moved_in["discovered"],
+                    "counts.emails": tally.moved_in["emails"],
+                    "counts.linkedin_without_email": tally.moved_in["linkedin_without_email"],
                     "funnel.inserted": tally.inserted,
                     "funnel.updated": tally.updated,
                     "funnel.duplicate": tally.duplicate,
@@ -969,13 +992,12 @@ class DiscoveryService:
                 },
             },
         )
-        for source_id, count in tally.sources.items():
-            if source_id == job_id or count <= 0:
+        for source_id, lost in tally.moved_out.items():
+            if source_id == job_id or lost["discovered"] <= 0:
                 continue
-            await self.db.search_jobs.update_one(
-                {"_id": source_id},
-                {"$inc": {"funnel.moved_out": count}},
-            )
+            inc = {"funnel.moved_out": lost["discovered"]}
+            inc.update({f"counts.{key}": -value for key, value in lost.items() if value})
+            await self.db.search_jobs.update_one({"_id": source_id}, {"$inc": inc})
 
     async def _mark_slice(
         self,

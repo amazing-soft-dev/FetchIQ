@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.contacts import backfill_contact_filters
+from app.counts import recount_jobs
 from app.db import utcnow
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ async def collapse_duplicate_logins(db) -> int:
 MIGRATIONS: Steps = (
     (1, "collapse duplicate candidate logins", collapse_duplicate_logins),
     (2, "backfill contact filter flags", backfill_contact_filters),
+    (3, "recount job counters", recount_jobs),
 )
 
 LATEST = MIGRATIONS[-1][0]
