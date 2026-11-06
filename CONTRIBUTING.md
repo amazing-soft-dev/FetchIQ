@@ -43,6 +43,7 @@ python -m pip install -r backend/requirements.txt
 cd backend
 python -m ruff check .
 python -m ruff format --check .
+# Needs a MongoDB at MONGODB_URI (default mongodb://localhost:27017); `docker compose up mongo` is one.
 DATABASE_NAME=fetchiq_test python -m pytest --cov=app --cov-report=term-missing
 ```
 
@@ -66,7 +67,7 @@ npm run build
 
 GitHub Actions runs these same checks on pull requests and pushes to `dev` and `main`. The workflow is [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- **Backend:** Python 3.12, 3.13 and 3.14 (one job per version), install `backend/requirements.txt`, Ruff, pytest with coverage against the in-memory database name `fetchiq_test`. Each job uploads its `coverage.xml` as an artifact.
+- **Backend:** Python 3.12, 3.13 and 3.14 (one job per version), install `backend/requirements.txt`, Ruff, pytest with coverage against a `mongo:8` service container, one `fetchiq_test_<id>` database per test. Each job uploads its `coverage.xml` as an artifact.
 - **Frontend:** Node 24 (also pinned in `frontend/.nvmrc` and the `engines` field), `npm ci`, a check that the generated API types match the backend, typecheck, lint, Vitest, and `next build`.
 
 The workflow token can read repository contents only. Third-party actions are pinned to commit SHAs. Dependabot opens weekly update pull requests for GitHub Actions, pip, and npm. Those pull requests are not merged automatically.
