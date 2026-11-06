@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.auth import require_token
 from app.campaigns import CampaignRunner
 from app.config import Settings
+from app.database import Database
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
 from app.github_auth import GitHubAppAuth
@@ -27,7 +28,7 @@ log = logging.getLogger(__name__)
 
 def create_app(
     settings: Settings | None = None,
-    db=None,
+    db: Database | None = None,
     github: GitHubClient | None = None,
     runner: JobRunner | None = None,
     mailer: Mailer | None = None,

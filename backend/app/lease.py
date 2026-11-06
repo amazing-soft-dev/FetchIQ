@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from pymongo import ReturnDocument
 
+from app.database import Collection
 from app.db import utcnow
 
 WORKER_ID = str(uuid4())
@@ -44,7 +45,7 @@ def stale_filter(now: datetime | None = None) -> dict:
 
 
 async def claim_stale(
-    collection,
+    collection: Collection,
     document_id: str,
     *,
     worker_id: str = WORKER_ID,
@@ -60,7 +61,7 @@ async def claim_stale(
     )
 
 
-async def heartbeat(collection, document_id: str, *, force: bool = False) -> bool:
+async def heartbeat(collection: Collection, document_id: str, *, force: bool = False) -> bool:
     """Refresh this worker's heartbeat on a document it holds. Throttled per document."""
 
     tick = time.monotonic()

@@ -11,6 +11,7 @@ from uuid import uuid4
 from pymongo import ReturnDocument
 
 from app.contacts import candidate_user_ids, contact_facts, evidence_by_user, evidence_for
+from app.database import Database
 from app.db import utcnow
 from app.lease import SWEEP_SECONDS, WORKER_ID, claim_stale, forget, heartbeat, lease_fields
 from app.mail import (
@@ -63,7 +64,7 @@ def _iso(value: object) -> str | None:
 class CampaignRunner:
     def __init__(
         self,
-        db,
+        db: Database,
         mailer: Mailer,
         sleeper: Callable | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -469,7 +470,7 @@ class CampaignRunner:
         )
 
 
-async def queue_campaign(db, body) -> dict:
+async def queue_campaign(db: Database, body) -> dict:
     """Store one campaign. Contacts without a public email are skipped, not queued.
 
     One campaign at a time per worker: an active campaign held by this process, or
@@ -566,7 +567,7 @@ def _recipient(
     }
 
 
-async def present_campaign(db, document: dict) -> dict:
+async def present_campaign(db: Database, document: dict) -> dict:
     campaign_id = document["_id"]
     counts = {
         "queued": await _status_count(db, campaign_id, ["queued", "sending"]),
