@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,10 +14,10 @@ import {
   listContactLogins,
   listContacts,
   listJobs,
-  listOutreachStatuses,
   renameOutreachStatus,
   updateContactStatus,
 } from "../lib/api";
+import { catalogKeys, useOutreachStatuses } from "../lib/queries";
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { ChipMultiSelect } from "./ChipMultiSelect";
@@ -65,14 +66,20 @@ function emailFilterValue(query: ContactQuery): string {
   return "any";
 }
 
-export function ContactsBrowser() {
+export function ContactsBrowser({
+  initialStatuses,
+}: {
+  initialStatuses?: OutreachStatus[] | undefined;
+}) {
   const router = useRouter();
+  const client = useQueryClient();
+  const statusesQuery = useOutreachStatuses(initialStatuses);
+  const statuses = statusesQuery.data ?? [];
   const searchParams = useSearchParams();
   const query = useMemo(() => readQuery(searchParams), [searchParams]);
   const queryKey = searchParams.toString();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [total, setTotal] = useState(0);
-  const [statuses, setStatuses] = useState<OutreachStatus[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -86,19 +93,22 @@ export function ContactsBrowser() {
   const searchRef = useRef<HTMLInputElement>(null);
   const loading = loadedKey !== queryKey;
 
+  function updateStatuses(update: (current: OutreachStatus[]) => OutreachStatus[]) {
+    client.setQueryData<OutreachStatus[]>(catalogKeys.statuses(), (current) =>
+      update(current ?? []),
+    );
+  }
+
+  const shownError =
+    error ??
+    (statusesQuery.error
+      ? statusesQuery.error instanceof Error
+        ? statusesQuery.error.message
+        : "Could not load statuses."
+      : null);
+
   useEffect(() => {
     let cancelled = false;
-    listOutreachStatuses()
-      .then((next) => {
-        if (!cancelled) {
-          setStatuses(next);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "Could not load statuses.");
-        }
-      });
     listJobs()
       .then((next) => {
         if (!cancelled) {
@@ -314,7 +324,7 @@ export function ContactsBrowser() {
     setError(null);
     try {
       const created = await createOutreachStatus(label);
-      setStatuses((current) => [...current, created]);
+      updateStatuses((current) => [...current, created]);
       setNewStatus("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not add the status.");
@@ -332,7 +342,9 @@ export function ContactsBrowser() {
     setError(null);
     try {
       const renamed = await renameOutreachStatus(statusId, cleaned);
-      setStatuses((items) => items.map((status) => (status.id === statusId ? renamed : status)));
+      updateStatuses((items) =>
+        items.map((status) => (status.id === statusId ? renamed : status)),
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not rename the status.");
     }
@@ -346,7 +358,7 @@ export function ContactsBrowser() {
     setError(null);
     try {
       await deleteOutreachStatus(status.id);
-      setStatuses((items) => items.filter((item) => item.id !== status.id));
+      updateStatuses((items) => items.filter((item) => item.id !== status.id));
       setContacts((items) =>
         items.map((contact) =>
           contact.outreach_status === status.id ? { ...contact, outreach_status: null } : contact,
@@ -400,7 +412,7 @@ export function ContactsBrowser() {
           Download
         </Button>
       </div>
-      {error ? <p className="mb-3 text-sm text-danger">{error}</p> : null}
+      {shownError ? <p className="mb-3 text-sm text-danger">{shownError}</p> : null}
       {notice ? <p className="mb-3 text-sm text-muted">{notice}</p> : null}
       <form
         onSubmit={(event) => {

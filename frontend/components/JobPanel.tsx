@@ -7,7 +7,7 @@ import { useState } from "react";
 
 import { exportHref } from "../lib/api";
 import { ACTIVE_JOB_STATUSES, useJob, useJobAction, useJobAnalysis } from "../lib/queries";
-import type { JobStatus } from "../lib/types";
+import type { Job, JobStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -26,9 +26,15 @@ function message(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
 
-export function JobPanel({ jobId }: { jobId: string }) {
+export function JobPanel({
+  jobId,
+  initialJob,
+}: {
+  jobId: string;
+  initialJob?: Job | undefined;
+}) {
   const router = useRouter();
-  const jobQuery = useJob(jobId);
+  const jobQuery = useJob(jobId, { initialData: initialJob });
   const job = jobQuery.data ?? null;
   const analysisQuery = useJobAnalysis(jobId, job?.status);
   const shownAnalysis = analysisQuery.data ?? null;
