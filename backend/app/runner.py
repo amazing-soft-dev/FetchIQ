@@ -1,11 +1,14 @@
 """In-process job runner. One document, one task, checkpoints in MongoDB."""
 
 import asyncio
+import logging
 
 from app.db import utcnow
 from app.discovery import DiscoveryService
 from app.enrichment import EnrichmentService
 from app.github import RATE_LIMIT_STEP_SECONDS, GitHubClient
+
+log = logging.getLogger(__name__)
 
 
 def _network_hold(job: dict) -> bool:
@@ -39,6 +42,7 @@ class JobRunner:
                 }
             },
         )
+        log.info("job running", extra={"job_id": job_id, "previous_status": job["status"]})
         current = self._tasks.get(job_id)
         if current is not None and not current.done():
             return
@@ -53,6 +57,7 @@ class JobRunner:
             current = self._tasks.get(job_id)
             if current is not None and not current.done():
                 continue
+            log.info("job resumed after restart", extra={"job_id": job_id})
             self._tasks[job_id] = asyncio.create_task(self._run(job_id))
 
     async def _control(self, job_id: str) -> str | None:
@@ -97,6 +102,10 @@ class JobRunner:
                         }
                     },
                 )
+                log.info(
+                    "job stopped while waiting for the rate limit",
+                    extra={"job_id": job_id, "status": control, "seconds_left": remaining},
+                )
                 return False
             step = min(RATE_LIMIT_STEP_SECONDS, remaining)
             await self.sleeper(step)
@@ -128,9 +137,11 @@ class JobRunner:
                 {"_id": job_id},
                 {"$set": {"status": status, "error": None, "updated_at": utcnow()}},
             )
+            log.info("job finished", extra={"job_id": job_id, "status": status})
         except Exception as exc:
             message = str(exc)[:500]
             status = "incomplete" if message.startswith("Could not resolve") else "failed"
+            log.exception("job failed", extra={"job_id": job_id, "status": status})
             await self.db.search_jobs.update_one(
                 {"_id": job_id},
                 {"$set": {"status": status, "error": message, "updated_at": utcnow()}},

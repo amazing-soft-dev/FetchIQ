@@ -11,6 +11,7 @@ anywhere else (see ``app.commits``). Noreply placeholders are never stored.
 
 import asyncio
 import base64
+import logging
 import math
 import re
 from datetime import timedelta
@@ -25,6 +26,8 @@ from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
 from app.locations import normalize_location
+
+log = logging.getLogger(__name__)
 
 MAX_REPO_READMES = 3
 MAX_README_BYTES = 100_000
@@ -633,6 +636,15 @@ class EnrichmentService:
         await self.db.candidates.update_one({"_id": candidate["_id"]}, {"$set": changes})
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.errors": 1}})
         await self._event(job_id, status, message, {"login": candidate.get("login")})
+        log.warning(
+            "enrichment miss",
+            extra={
+                "job_id": job_id,
+                "login": candidate.get("login"),
+                "status": status,
+                "reason": message,
+            },
+        )
 
     async def _control(self, job_id: str) -> str | None:
         job = await self.db.search_jobs.find_one({"_id": job_id}, {"control": 1})
@@ -650,6 +662,10 @@ class EnrichmentService:
             {"$set": {"status": status, "control": None, "updated_at": utcnow()}},
         )
         await self._event(job_id, status, f"Job {status}", {})
+        log.info(
+            "job control applied",
+            extra={"job_id": job_id, "status": status, "stage": "enrichment"},
+        )
 
     async def _wait_through_rate_limit(
         self, job_id: str, checkpoint: dict, exc: RateLimited
@@ -663,6 +679,16 @@ class EnrichmentService:
             "rate_limited",
             "Waiting for the GitHub rate limit to reset",
             {"retry_after_seconds": exc.retry_after},
+        )
+        log.warning(
+            "github rate limit reached",
+            extra={
+                "job_id": job_id,
+                "stage": "enrichment",
+                "retry_after_seconds": exc.retry_after,
+                "reset_at": exc.reset_at,
+                "remaining": exc.remaining,
+            },
         )
 
         async def stopped() -> str | None:
