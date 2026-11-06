@@ -17,7 +17,9 @@ concurrency:
 jobs:
   backend:
     name: Backend (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest (26.04) runs a Linux kernel MongoDB 8 refuses to start on
+    # (https://jira.mongodb.org/browse/SERVER-121912). Move back once a fixed release ships.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
