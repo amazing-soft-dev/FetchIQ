@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.campaigns import ACTIVE, CampaignBusy, NoRecipients, present_campaign, queue_campaign
 from app.db import utcnow
 from app.mail import UnknownPlaceholder, unknown_placeholders
+from app.schemas import ActiveCampaign, CampaignOut, MailCheckOut
 
 router = APIRouter(prefix="/api")
 
@@ -52,7 +53,7 @@ class CampaignCreate(BaseModel):
         return self
 
 
-@router.post("/mail/check")
+@router.post("/mail/check", response_model=MailCheckOut, response_model_exclude_none=True)
 async def check_mail(request: Request) -> dict:
     return await asyncio.to_thread(request.app.state.mailer.check)
 
@@ -64,7 +65,7 @@ async def _load(db, campaign_id: str) -> dict:
     return document
 
 
-@router.get("/campaigns/active")
+@router.get("/campaigns/active", response_model=ActiveCampaign)
 async def active_campaign(request: Request) -> dict:
     document = await request.app.state.db.campaigns.find_one(
         {"status": {"$in": list(ACTIVE)}},
@@ -75,7 +76,7 @@ async def active_campaign(request: Request) -> dict:
     return {"campaign": await present_campaign(request.app.state.db, document)}
 
 
-@router.post("/campaigns", status_code=201)
+@router.post("/campaigns", status_code=201, response_model=CampaignOut)
 async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     if not request.app.state.mailer.configured():
         raise HTTPException(status_code=422, detail="Mail is not configured.")
@@ -95,13 +96,13 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     return await present_campaign(request.app.state.db, stored)
 
 
-@router.get("/campaigns/{campaign_id}")
+@router.get("/campaigns/{campaign_id}", response_model=CampaignOut)
 async def get_campaign(campaign_id: str, request: Request) -> dict:
     db = request.app.state.db
     return await present_campaign(db, await _load(db, campaign_id))
 
 
-@router.post("/campaigns/{campaign_id}/pause")
+@router.post("/campaigns/{campaign_id}/pause", response_model=CampaignOut)
 async def pause_campaign(campaign_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, campaign_id)
@@ -122,7 +123,7 @@ async def pause_campaign(campaign_id: str, request: Request) -> dict:
     return await present_campaign(db, await _load(db, campaign_id))
 
 
-@router.post("/campaigns/{campaign_id}/resume")
+@router.post("/campaigns/{campaign_id}/resume", response_model=CampaignOut)
 async def resume_campaign(campaign_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, campaign_id)
@@ -135,7 +136,7 @@ async def resume_campaign(campaign_id: str, request: Request) -> dict:
     return await present_campaign(db, await _load(db, campaign_id))
 
 
-@router.post("/campaigns/{campaign_id}/cancel")
+@router.post("/campaigns/{campaign_id}/cancel", response_model=CampaignOut)
 async def cancel_campaign(campaign_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, campaign_id)

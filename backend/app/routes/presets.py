@@ -8,6 +8,7 @@ from pydantic import BaseModel, field_validator
 from app.db import utcnow
 from app.geo import COUNTRIES, US_STATES
 from app.models import SearchCriteria
+from app.schemas import GeoCatalog, PresetList, PresetOut
 
 router = APIRouter(prefix="/api")
 
@@ -35,12 +36,12 @@ def public_preset(document: dict) -> dict:
     }
 
 
-@router.get("/geo")
+@router.get("/geo", response_model=GeoCatalog)
 async def geo() -> dict[str, list[str]]:
     return {"countries": list(COUNTRIES), "us_states": list(US_STATES)}
 
 
-@router.post("/presets", status_code=201)
+@router.post("/presets", status_code=201, response_model=PresetOut)
 async def create_preset(body: PresetCreate, request: Request) -> dict:
     document = {
         "_id": str(uuid4()),
@@ -52,14 +53,14 @@ async def create_preset(body: PresetCreate, request: Request) -> dict:
     return public_preset(document)
 
 
-@router.get("/presets")
+@router.get("/presets", response_model=PresetList)
 async def list_presets(request: Request) -> dict:
     cursor = request.app.state.db.search_presets.find({}).sort("created_at", -1)
     documents = await cursor.to_list(100)
     return {"presets": [public_preset(document) for document in documents]}
 
 
-@router.get("/presets/{preset_id}")
+@router.get("/presets/{preset_id}", response_model=PresetOut)
 async def get_preset(preset_id: str, request: Request) -> dict:
     document = await request.app.state.db.search_presets.find_one({"_id": preset_id})
     if document is None:

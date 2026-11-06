@@ -16,6 +16,16 @@ from app.contacts import (
 )
 from app.db import isoformat, utcnow
 from app.export import COLUMNS, build_row, format_csv_row
+from app.schemas import (
+    BulkStatusResult,
+    ContactLoginsOut,
+    ContactPageOut,
+    CountryList,
+    Deleted,
+    OutreachStatusOut,
+    StatusChange,
+    StatusList,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -199,13 +209,13 @@ def _check_filters(email: str, email_kind: str, linkedin: str, page: int, page_s
         raise HTTPException(status_code=422, detail="page size must be 25, 50, 100, 200, or 500")
 
 
-@router.get("/outreach-statuses")
+@router.get("/outreach-statuses", response_model=StatusList)
 async def list_statuses(request: Request) -> dict:
     documents = await _statuses(request.app.state.db)
     return {"statuses": [_public_status(document) for document in documents]}
 
 
-@router.post("/outreach-statuses", status_code=201)
+@router.post("/outreach-statuses", status_code=201, response_model=OutreachStatusOut)
 async def create_status(body: StatusCreate, request: Request) -> dict:
     db = request.app.state.db
     label = _clean_label(body.label)
@@ -225,7 +235,7 @@ async def create_status(body: StatusCreate, request: Request) -> dict:
     return _public_status(document)
 
 
-@router.patch("/outreach-statuses/{status_id}")
+@router.patch("/outreach-statuses/{status_id}", response_model=OutreachStatusOut)
 async def rename_status(status_id: str, body: StatusRename, request: Request) -> dict:
     db = request.app.state.db
     document = await _require_status(db, status_id)
@@ -237,7 +247,7 @@ async def rename_status(status_id: str, body: StatusRename, request: Request) ->
     return _public_status(document)
 
 
-@router.delete("/outreach-statuses/{status_id}")
+@router.delete("/outreach-statuses/{status_id}", response_model=Deleted)
 async def delete_status(status_id: str, request: Request) -> dict:
     db = request.app.state.db
     await _require_status(db, status_id)
@@ -249,7 +259,7 @@ async def delete_status(status_id: str, request: Request) -> dict:
     return {"deleted": status_id}
 
 
-@router.get("/contacts")
+@router.get("/contacts", response_model=ContactPageOut)
 async def list_contacts(
     request: Request,
     page: int = Query(default=1),
@@ -281,7 +291,7 @@ async def list_contacts(
     return {"contacts": contacts, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/contacts/countries")
+@router.get("/contacts/countries", response_model=CountryList)
 async def list_contact_countries(request: Request) -> dict:
     values = await request.app.state.db.candidates.distinct("country")
     names = sorted(
@@ -291,7 +301,7 @@ async def list_contact_countries(request: Request) -> dict:
     return {"countries": names}
 
 
-@router.get("/contacts/logins")
+@router.get("/contacts/logins", response_model=ContactLoginsOut)
 async def list_contact_logins(
     request: Request,
     email: str = Query(default="any"),
@@ -346,7 +356,7 @@ async def _apply_status(db, logins: list[str], status: str | None) -> int:
     return int(result.modified_count)
 
 
-@router.patch("/contacts/{login}/status")
+@router.patch("/contacts/{login}/status", response_model=StatusChange)
 async def update_contact_status(login: str, body: StatusUpdate, request: Request) -> dict:
     db = request.app.state.db
     candidate = await db.candidates.find_one({"login": login}, {"login": 1})
@@ -356,7 +366,7 @@ async def update_contact_status(login: str, body: StatusUpdate, request: Request
     return {"login": login, "outreach_status": body.status, "updated": updated}
 
 
-@router.post("/contacts/status")
+@router.post("/contacts/status", response_model=BulkStatusResult)
 async def bulk_update_status(body: BulkStatus, request: Request) -> dict:
     updated = await _apply_status(request.app.state.db, body.logins, body.status)
     return {"updated": updated, "outreach_status": body.status}

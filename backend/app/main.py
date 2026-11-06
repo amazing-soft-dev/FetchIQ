@@ -22,6 +22,7 @@ from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
 from app.routes.presets import router as presets_router
 from app.runner import JobRunner
+from app.schemas import ReadyOut
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def create_app(
 
         return {"status": "ok"}
 
-    @app.get("/api/ready")
+    @app.get("/api/ready", response_model=ReadyOut, responses={503: {"model": ReadyOut}})
     async def ready(request: Request) -> JSONResponse:
         """Readiness: MongoDB answers and the GitHub App token can be minted."""
 

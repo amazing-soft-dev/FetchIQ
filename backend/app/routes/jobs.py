@@ -9,6 +9,7 @@ from app.db import isoformat, utcnow
 from app.discovery import new_job_document
 from app.export import stream_job_csv
 from app.models import SearchCriteria
+from app.schemas import AnalysisOut, JobList, JobOut
 
 router = APIRouter(prefix="/api")
 
@@ -55,7 +56,7 @@ async def _load(db, job_id: str) -> dict:
     return document
 
 
-@router.get("/jobs")
+@router.get("/jobs", response_model=JobList)
 async def list_jobs(request: Request) -> dict:
     cursor = request.app.state.db.search_jobs.find(
         {},
@@ -74,7 +75,7 @@ async def list_jobs(request: Request) -> dict:
     }
 
 
-@router.post("/jobs", status_code=201)
+@router.post("/jobs", status_code=201, response_model=JobOut)
 async def create_job(body: JobCreate, request: Request) -> dict:
     db = request.app.state.db
     document = new_job_document(body.criteria)
@@ -83,13 +84,13 @@ async def create_job(body: JobCreate, request: Request) -> dict:
     return public_job(document)
 
 
-@router.get("/jobs/{job_id}/analysis")
+@router.get("/jobs/{job_id}/analysis", response_model=AnalysisOut)
 async def job_analysis(job_id: str, request: Request) -> dict:
     db = request.app.state.db
     return await build_analysis(db, await _load(db, job_id))
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", response_model=JobOut)
 async def get_job(job_id: str, request: Request) -> dict:
     db = request.app.state.db
     return public_job(await _load(db, job_id))
@@ -114,17 +115,17 @@ async def export_job_csv(
     )
 
 
-@router.post("/jobs/{job_id}/start")
+@router.post("/jobs/{job_id}/start", response_model=JobOut)
 async def start_job(job_id: str, request: Request) -> dict:
     return await _kick(job_id, request, allowed={"queued", "paused", "incomplete"})
 
 
-@router.post("/jobs/{job_id}/resume")
+@router.post("/jobs/{job_id}/resume", response_model=JobOut)
 async def resume_job(job_id: str, request: Request) -> dict:
     return await _kick(job_id, request, allowed={"paused", "incomplete"})
 
 
-@router.post("/jobs/{job_id}/pause")
+@router.post("/jobs/{job_id}/pause", response_model=JobOut)
 async def pause_job(job_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, job_id)
@@ -145,7 +146,7 @@ async def pause_job(job_id: str, request: Request) -> dict:
     return public_job(await _load(db, job_id))
 
 
-@router.post("/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel", response_model=JobOut)
 async def cancel_job(job_id: str, request: Request) -> dict:
     db = request.app.state.db
     document = await _load(db, job_id)
