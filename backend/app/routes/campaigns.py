@@ -53,7 +53,7 @@ class CampaignCreate(BaseModel):
         return self
 
 
-@router.post("/mail/check", response_model=MailCheckOut, response_model_exclude_none=True)
+@router.post("/mail/check", response_model=MailCheckOut)
 async def check_mail(request: Request) -> dict:
     return await asyncio.to_thread(request.app.state.mailer.check)
 

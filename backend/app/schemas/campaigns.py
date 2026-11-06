@@ -19,7 +19,7 @@ class CampaignFailure(BaseModel):
 
 class CampaignOut(BaseModel):
     id: str
-    status: CampaignStatus | None
+    status: CampaignStatus
     subject: str
     body: str
     hourly_limit: int
@@ -36,14 +36,22 @@ class ActiveCampaign(BaseModel):
     campaign: CampaignOut | None
 
 
-class MailCheckOut(BaseModel):
-    """``ok`` with the mailbox named, or ``ok: false`` with a ``detail``."""
+class MailCheckOk(BaseModel):
+    """The mailbox answered: who sends, through which host, and where copies go."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    ok: bool
-    detail: str | None = None
-    from_address: str | None = Field(default=None, alias="from")
-    host: str | None = None
-    port: int | None = None
-    sent_folder: str | None = None
+    ok: Literal[True]
+    from_address: str = Field(alias="from")
+    host: str
+    port: int
+    sent_folder: str
+
+
+class MailCheckFailed(BaseModel):
+    ok: Literal[False]
+    detail: str
+
+
+# A union on ``ok`` so the generated TypeScript narrows the way the UI reads it.
+MailCheckOut = MailCheckOk | MailCheckFailed

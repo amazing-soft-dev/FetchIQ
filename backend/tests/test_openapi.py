@@ -30,7 +30,7 @@ async def test_every_json_route_declares_a_response_schema(db) -> None:
             schema = (((success or {}).get("content") or {}).get("application/json") or {}).get(
                 "schema"
             ) or {}
-            if "$ref" not in schema and "type" not in schema:
+            if not any(key in schema for key in ("$ref", "type", "anyOf", "oneOf")):
                 missing.append(f"{method.upper()} {path}")
     assert seen >= 25
     assert missing == []

@@ -46,6 +46,15 @@ python -m ruff format --check .
 DATABASE_NAME=fetchiq_test python -m pytest --cov=app --cov-report=term-missing
 ```
 
+The frontend's API types in `frontend/lib/api-types.ts` are generated from the backend's OpenAPI document and committed. After changing a route or a response model, regenerate them and commit the result; CI fails when the file is out of date:
+
+```bash
+cd backend
+python scripts/openapi.py
+cd ../frontend
+npm run types
+```
+
 ```bash
 cd frontend
 npm ci
@@ -58,7 +67,7 @@ npm run build
 GitHub Actions runs these same checks on pull requests and pushes to `dev` and `main`. The workflow is [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 - **Backend:** Python 3.12, 3.13 and 3.14 (one job per version), install `backend/requirements.txt`, Ruff, pytest with coverage against the in-memory database name `fetchiq_test`. Each job uploads its `coverage.xml` as an artifact.
-- **Frontend:** Node 24 (also pinned in `frontend/.nvmrc` and the `engines` field), `npm ci`, typecheck, lint, Vitest, and `next build`.
+- **Frontend:** Node 24 (also pinned in `frontend/.nvmrc` and the `engines` field), `npm ci`, a check that the generated API types match the backend, typecheck, lint, Vitest, and `next build`.
 
 The workflow token can read repository contents only. Third-party actions are pinned to commit SHAs. Dependabot opens weekly update pull requests for GitHub Actions, pip, and npm. Those pull requests are not merged automatically.
 
