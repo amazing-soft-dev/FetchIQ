@@ -7,6 +7,9 @@ name: fetchiq
 services:
   mongo:
     image: mongo:8
+    # Published so the backend tests can run on the host against this server.
+    ports:
+      - "27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:

@@ -2,9 +2,8 @@
 
 Modules type their ``db`` against ``Database`` instead of importing a driver
 class, so a driver change touches ``db.py`` and ``main.py`` only. The shapes
-mirror PyMongo's ``AsyncMongoClient`` and ``mongomock-motor``; return values are
-left as ``Any`` because the drivers return different result classes with the
-same attributes.
+mirror PyMongo's ``AsyncMongoClient``; return values are left as ``Any`` so the
+protocol does not pin the driver's result classes.
 
 Nothing here runs at runtime. ``runtime_checkable`` only lets tests assert
 that a driver object has every method the app calls.

@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from mongomock_motor import AsyncMongoMockClient
 from pymongo.errors import DuplicateKeyError
 
 from app.config import Settings
@@ -18,18 +17,14 @@ from app.migrations import (
 )
 
 
-def _fresh():
-    return AsyncMongoMockClient()["fetchiq_test"]
-
-
 def test_migration_versions_are_strictly_increasing_from_one() -> None:
     numbers = [number for number, _name, _step in MIGRATIONS]
     assert numbers == list(range(1, len(numbers) + 1))
     assert LATEST == numbers[-1]
 
 
-async def test_migrations_run_once_and_record_the_version() -> None:
-    db = _fresh()
+async def test_migrations_run_once_and_record_the_version(fresh_database) -> None:
+    db = fresh_database()
     assert await current_version(db) == 0
     assert await pending_migrations(db) == [number for number, _n, _s in MIGRATIONS]
 
@@ -43,8 +38,8 @@ async def test_migrations_run_once_and_record_the_version() -> None:
     assert await pending_migrations(db) == []
 
 
-async def test_a_lower_stored_version_runs_only_the_missing_steps() -> None:
-    db = _fresh()
+async def test_a_lower_stored_version_runs_only_the_missing_steps(fresh_database) -> None:
+    db = fresh_database()
     seen: list[int] = []
 
     async def first(_db) -> None:
@@ -64,8 +59,8 @@ async def test_a_lower_stored_version_runs_only_the_missing_steps() -> None:
     assert await current_version(db) == 3
 
 
-async def test_a_failing_step_keeps_the_version_of_the_last_good_one() -> None:
-    db = _fresh()
+async def test_a_failing_step_keeps_the_version_of_the_last_good_one(fresh_database) -> None:
+    db = fresh_database()
 
     async def ok(_db) -> None:
         return None
@@ -79,8 +74,10 @@ async def test_a_failing_step_keeps_the_version_of_the_last_good_one() -> None:
     assert await current_version(db) == 1
 
 
-async def test_migration_one_collapses_duplicate_logins_before_the_unique_index() -> None:
-    db = _fresh()
+async def test_migration_one_collapses_duplicate_logins_before_the_unique_index(
+    fresh_database,
+) -> None:
+    db = fresh_database()
     await db.candidates.insert_many(
         [
             {"login": "ada", "job_id": "old", "updated_at": datetime(2020, 1, 1, tzinfo=UTC)},
@@ -102,8 +99,8 @@ async def test_migration_one_collapses_duplicate_logins_before_the_unique_index(
     assert indexes["uniq_login"]["unique"] is True
 
 
-async def test_migration_two_backfills_the_contact_filter_flags() -> None:
-    db = _fresh()
+async def test_migration_two_backfills_the_contact_filter_flags(fresh_database) -> None:
+    db = fresh_database()
     await db.candidates.insert_many(
         [
             {"login": "ada", "github_user_id": 7, "public_email": None},

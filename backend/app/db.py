@@ -151,7 +151,7 @@ async def connect(settings: Settings) -> tuple[Client, Database]:
     assert_database_allowed(settings.database_name)
     client: Client | None = None
     try:
-        client = AsyncMongoClient(settings.mongodb_uri)
+        client = AsyncMongoClient(settings.mongodb_uri, tz_aware=True)
         database = client[settings.database_name]
         await database.command("ping")
     except (ServerSelectionTimeoutError, ConfigurationError) as exc:

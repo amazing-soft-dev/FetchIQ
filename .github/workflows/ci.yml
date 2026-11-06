@@ -23,6 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.12", "3.13", "3.14"]
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -51,6 +61,7 @@ jobs:
         run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml
         env:
           DATABASE_NAME: fetchiq_test
+          MONGODB_URI: mongodb://localhost:27017
 
       - name: Upload coverage report
         if: always()
