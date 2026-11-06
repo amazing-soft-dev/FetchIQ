@@ -4,12 +4,24 @@ import {
   getActiveCampaign,
   getAnalysis,
   getCampaign,
+  getGeo,
   getJob,
   listJobs,
+  listOutreachStatuses,
+  listPresets,
   postCampaignAction,
   postJobAction,
 } from "./api";
-import type { Campaign, CampaignStatus, Job, JobStatus, JobSummary } from "./types";
+import type {
+  Campaign,
+  CampaignStatus,
+  GeoCatalog,
+  Job,
+  JobStatus,
+  JobSummary,
+  OutreachStatus,
+  Preset,
+} from "./types";
 
 export const ACTIVE_JOB_STATUSES: readonly JobStatus[] = ["queued", "running", "paused"];
 export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = [
@@ -31,6 +43,12 @@ export const jobKeys = {
   analysis: (jobId: string) => ["jobs", "analysis", jobId] as const,
 };
 
+export const catalogKeys = {
+  geo: () => ["geo"] as const,
+  presets: () => ["presets"] as const,
+  statuses: () => ["outreach-statuses"] as const,
+};
+
 export const campaignKeys = {
   active: () => ["campaigns", "active"] as const,
   detail: (campaignId: string) => ["campaigns", "detail", campaignId] as const,
@@ -50,12 +68,21 @@ export function activeJobSummary(jobs: JobSummary[]): JobSummary | undefined {
   return jobs.find((job) => ACTIVE_JOB_STATUSES.includes(job.status));
 }
 
-export function useJob(jobId: string, options: { intervalMs?: number; enabled?: boolean } = {}) {
+/** Server components pass data they already fetched; the query starts from it. */
+function seeded<T>(initial: T | undefined): { initialData: T } | Record<never, never> {
+  return initial !== undefined ? { initialData: initial } : {};
+}
+
+export function useJob(
+  jobId: string,
+  options: { intervalMs?: number; enabled?: boolean; initialData?: Job | undefined } = {},
+) {
   const intervalMs = options.intervalMs ?? JOB_POLL_MS;
   return useQuery({
     queryKey: jobKeys.detail(jobId),
     queryFn: () => getJob(jobId),
     enabled: options.enabled ?? true,
+    ...seeded(options.initialData),
     refetchInterval: (query) => jobPollInterval(query.state.data?.status, intervalMs),
   });
 }
@@ -133,4 +160,35 @@ export function useSeedCampaign() {
     client.setQueryData(campaignKeys.detail(campaign.id), campaign);
     client.setQueryData(campaignKeys.active(), campaign);
   };
+}
+
+// Catalogs: small lists that change only when the user edits them, so the first
+// render's copy (from the server component) is kept and edits update the cache.
+const CATALOG_STALE_MS = 60_000;
+
+export function useGeo(initial?: GeoCatalog | undefined) {
+  return useQuery({
+    queryKey: catalogKeys.geo(),
+    queryFn: getGeo,
+    staleTime: Infinity,
+    ...seeded(initial),
+  });
+}
+
+export function usePresets(initial?: Preset[] | undefined) {
+  return useQuery({
+    queryKey: catalogKeys.presets(),
+    queryFn: listPresets,
+    staleTime: CATALOG_STALE_MS,
+    ...seeded(initial),
+  });
+}
+
+export function useOutreachStatuses(initial?: OutreachStatus[] | undefined) {
+  return useQuery({
+    queryKey: catalogKeys.statuses(),
+    queryFn: listOutreachStatuses,
+    staleTime: CATALOG_STALE_MS,
+    ...seeded(initial),
+  });
 }

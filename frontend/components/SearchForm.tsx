@@ -1,14 +1,17 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { createJob, createPreset, getGeo, listPresets, startJob } from "../lib/api";
+import { createJob, createPreset, startJob } from "../lib/api";
+import { catalogKeys, useGeo, usePresets } from "../lib/queries";
 import { searchCriteriaError } from "../lib/schemas";
 import {
   UNITED_STATES,
   emptyCriteria,
   type AccountAge,
+  type GeoCatalog,
   type Preset,
   type SearchCriteria,
 } from "../lib/types";
@@ -54,10 +57,19 @@ function accountAgeFromInputs(inputs: Record<keyof AccountAge, string>): Account
   };
 }
 
-export function SearchForm() {
+export function SearchForm({
+  initialGeo,
+  initialPresets,
+}: {
+  initialGeo?: GeoCatalog | undefined;
+  initialPresets?: Preset[] | undefined;
+}) {
   const router = useRouter();
-  const [catalog, setCatalog] = useState<{ countries: string[]; us_states: string[] } | null>(null);
-  const [presets, setPresets] = useState<Preset[]>([]);
+  const client = useQueryClient();
+  const geoQuery = useGeo(initialGeo);
+  const presetsQuery = usePresets(initialPresets);
+  const catalog = geoQuery.data ?? null;
+  const presets = presetsQuery.data ?? [];
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria);
   const [ageInputs, setAgeInputs] = useState(emptyAgeInputs);
   const [limitInput, setLimitInput] = useState("");
@@ -67,24 +79,14 @@ export function SearchForm() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([getGeo(), listPresets()])
-      .then(([geo, saved]) => {
-        if (!cancelled) {
-          setCatalog(geo);
-          setPresets(saved);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "Could not load search options.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const loadFailure = geoQuery.error ?? presetsQuery.error;
+  const shownError =
+    error ??
+    (loadFailure
+      ? loadFailure instanceof Error
+        ? loadFailure.message
+        : "Could not load search options."
+      : null);
 
   const unitedStatesSelected = criteria.countries.includes(UNITED_STATES);
 
@@ -144,7 +146,10 @@ export function SearchForm() {
     setError(null);
     try {
       const saved = await createPreset(presetName, next);
-      setPresets((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      client.setQueryData<Preset[]>(catalogKeys.presets(), (current) => [
+        saved,
+        ...(current ?? []).filter((item) => item.id !== saved.id),
+      ]);
       setPresetName("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save the preset.");
@@ -193,7 +198,7 @@ export function SearchForm() {
         </p>
       </div>
 
-      {error ? <p className="mb-4 text-sm text-danger">{error}</p> : null}
+      {shownError ? <p className="mb-4 text-sm text-danger">{shownError}</p> : null}
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <ChipMultiSelect
