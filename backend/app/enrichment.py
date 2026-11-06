@@ -26,6 +26,7 @@ from app.counts import credit_candidate
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
+from app.lease import heartbeat
 from app.locations import normalize_location
 
 log = logging.getLogger(__name__)
@@ -700,6 +701,7 @@ class EnrichmentService:
         )
 
         async def stopped() -> str | None:
+            await heartbeat(self.db.search_jobs, job_id)
             return await self._control(job_id)
 
         reason, remaining = await wait_out_rate_limit(exc.retry_after, self.sleeper, stopped)
@@ -735,6 +737,7 @@ class EnrichmentService:
             {"_id": job_id},
             {"$set": {"checkpoint": checkpoint, "updated_at": utcnow()}},
         )
+        await heartbeat(self.db.search_jobs, job_id)
 
     async def _event(self, job_id: str, kind: str, message: str, detail: dict) -> None:
         await self.db.job_events.insert_one(
