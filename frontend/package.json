@@ -8,7 +8,8 @@
     "dev": "next dev",
     "build": "next build",
     "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.4.1",
@@ -31,11 +32,15 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "eslint": "^10.14.0",
     "eslint-config-next": "^16.4.3",
-    "typescript": "^7.0.2"
+    "jsdom": "^31.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   }
 }
