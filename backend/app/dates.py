@@ -1,8 +1,7 @@
 """UTC calendar windows for GitHub account age."""
 
+import calendar
 from datetime import date, timedelta
-
-from dateutil.relativedelta import relativedelta
 
 
 def account_age_window(
@@ -23,9 +22,33 @@ def account_age_window(
         raise ValueError("account age components are out of range")
     if min_years * 12 + min_months > max_years * 12 + max_months:
         raise ValueError("min account age must be less than or equal to max account age")
-    created_to = today - relativedelta(years=min_years, months=min_months)
-    created_from = today - relativedelta(years=max_years, months=max_months)
+    created_to = add_months(today, -(min_years * 12 + min_months))
+    created_from = add_months(today, -(max_years * 12 + max_months))
     return created_from, created_to
+
+
+def add_months(day: date, months: int) -> date:
+    """Move ``day`` by whole calendar months, clamped to the last day of the target month.
+
+    A ``datetime`` keeps its time of day and timezone.
+    """
+
+    index = day.year * 12 + (day.month - 1) + months
+    year, month_index = divmod(index, 12)
+    month = month_index + 1
+    last_day = calendar.monthrange(year, month)[1]
+    return day.replace(year=year, month=month, day=min(day.day, last_day))
+
+
+def months_between(start: date, end: date) -> int:
+    """Whole calendar months from ``start`` to ``end``. Negative when ``end`` is earlier."""
+
+    if end < start:
+        return -months_between(end, start)
+    months = (end.year - start.year) * 12 + end.month - start.month
+    if add_months(start, months) > end:
+        months -= 1
+    return months
 
 
 def split_date_window(start: date, end: date) -> tuple[tuple[date, date], tuple[date, date]] | None:
