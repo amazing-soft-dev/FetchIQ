@@ -4,6 +4,7 @@ import asyncio
 import logging
 from contextlib import suppress
 
+from app.database import Database
 from app.db import utcnow
 from app.discovery import DiscoveryService
 from app.enrichment import EnrichmentService
@@ -21,7 +22,7 @@ def _network_hold(job: dict) -> bool:
 
 
 class JobRunner:
-    def __init__(self, db, github: GitHubClient, sleeper=None) -> None:
+    def __init__(self, db: Database, github: GitHubClient, sleeper=None) -> None:
         self.db = db
         self.github = github
         self.sleeper = sleeper or asyncio.sleep

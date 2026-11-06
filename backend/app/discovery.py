@@ -10,6 +10,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.contacts import is_blank
 from app.counts import candidate_share, zero_share
+from app.database import Database
 from app.dates import account_age_window, split_date_window
 from app.db import utcnow
 from app.enrichment import EnrichmentService
@@ -273,7 +274,7 @@ def _checked_at(value: object) -> datetime | None:
 
 
 async def upsert_candidate(
-    db, job_id: str, item: dict[str, Any]
+    db: Database, job_id: str, item: dict[str, Any]
 ) -> tuple[str, str | None, dict[str, int] | None]:
     """Insert a username once. Return the outcome, the previous job id, and the moved share.
 
@@ -519,7 +520,7 @@ def _open_overflow(checkpoint: dict[str, Any], limit: int, slots: int) -> bool:
 
 
 class DiscoveryService:
-    def __init__(self, db, github, *, today: date | None = None, sleeper=None) -> None:
+    def __init__(self, db: Database, github, *, today: date | None = None, sleeper=None) -> None:
         self.db = db
         self.github = github
         self.today = today or utcnow().date()

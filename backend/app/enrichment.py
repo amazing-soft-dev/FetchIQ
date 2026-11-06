@@ -23,6 +23,7 @@ from pymongo.errors import DuplicateKeyError
 from app.commits import find_commit_email
 from app.contacts import filter_fields, is_blank, latest_valid_email, merge_profile_fields
 from app.counts import credit_candidate
+from app.database import Database
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
@@ -152,7 +153,7 @@ def parse_profile_emails(html: str) -> list[str]:
 
 
 class EnrichmentService:
-    def __init__(self, db, github, sleeper=None) -> None:
+    def __init__(self, db: Database, github, sleeper=None) -> None:
         self.db = db
         self.github = github
         self.sleeper = sleeper or asyncio.sleep

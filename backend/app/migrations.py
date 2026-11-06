@@ -13,21 +13,21 @@ step runs again on the next start.
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
 
 from app.contacts import backfill_contact_filters
 from app.counts import recount_jobs
+from app.database import Database
 from app.db import utcnow
 
 log = logging.getLogger(__name__)
 
 SCHEMA_ID = "fetchiq"
 
-Step = Callable[[Any], Awaitable[object]]
+Step = Callable[[Database], Awaitable[object]]
 Steps = tuple[tuple[int, str, Step], ...]
 
 
-async def collapse_duplicate_logins(db) -> int:
+async def collapse_duplicate_logins(db: Database) -> int:
     """Keep the newest candidate for each username so the unique login index can build."""
 
     best: dict[str, tuple[datetime, object]] = {}
@@ -69,19 +69,19 @@ MIGRATIONS: Steps = (
 LATEST = MIGRATIONS[-1][0]
 
 
-async def current_version(db) -> int:
+async def current_version(db: Database) -> int:
     document = await db.schema_version.find_one({"_id": SCHEMA_ID})
     if document is None:
         return 0
     return int(document.get("version") or 0)
 
 
-async def pending_migrations(db, steps: Steps = MIGRATIONS) -> list[int]:
+async def pending_migrations(db: Database, steps: Steps = MIGRATIONS) -> list[int]:
     version = await current_version(db)
     return [number for number, _name, _step in steps if number > version]
 
 
-async def run_migrations(db, steps: Steps = MIGRATIONS) -> list[int]:
+async def run_migrations(db: Database, steps: Steps = MIGRATIONS) -> list[int]:
     """Apply every step above the stored version. Returns the versions applied."""
 
     version = await current_version(db)
