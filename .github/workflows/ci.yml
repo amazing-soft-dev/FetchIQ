@@ -89,6 +89,26 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.detect.outputs.exists == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Generate API types from the backend
+        if: steps.detect.outputs.exists == 'true'
+        run: |
+          python -m pip install --quiet -r backend/requirements.txt
+          python backend/scripts/openapi.py
+          cd frontend && npm run types
+
+      - name: API types are current
+        if: steps.detect.outputs.exists == 'true'
+        run: |
+          if ! git diff --exit-code -- frontend/lib/api-types.ts; then
+            echo "::error::frontend/lib/api-types.ts is out of date. Run: python backend/scripts/openapi.py && (cd frontend && npm run types)"
+            exit 1
+          fi
+
       - name: Typecheck
         if: steps.detect.outputs.exists == 'true'
         working-directory: frontend

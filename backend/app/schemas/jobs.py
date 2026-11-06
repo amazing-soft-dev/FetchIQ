@@ -47,7 +47,7 @@ class JobOut(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
-    status: JobStatus | None
+    status: JobStatus
     created_at: str | None
 
 
@@ -68,7 +68,7 @@ class PlaceReport(BaseModel):
 
 
 class SliceCap(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", json_schema_serialization_defaults_required=True)
 
     location: str | None = None
     start: str | None = None

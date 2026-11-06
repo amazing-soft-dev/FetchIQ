@@ -1,126 +1,36 @@
-export type AccountAge = {
-  min_years: number;
-  min_months: number;
-  max_years: number;
-  max_months: number;
-};
+// Response and request shapes come from the backend's OpenAPI document through
+// lib/api-types.ts (generated; see CONTRIBUTING). Only the names used by the UI
+// are re-exported here, plus the two values that are not part of the API.
+import type { components } from "./api-types";
 
-export type SearchCriteria = {
-  countries: string[];
-  us_states: string[];
-  account_age: AccountAge;
-  keywords: string[];
-  candidate_limit: number;
-};
+type Schemas = components["schemas"];
 
-export type JobStatus =
-  | "queued"
-  | "running"
-  | "paused"
-  | "incomplete"
-  | "succeeded"
-  | "failed"
-  | "cancelled";
+export type AccountAge = Schemas["AccountAge-Output"];
+export type SearchCriteria = Schemas["SearchCriteria-Output"];
 
-export type OverlapJob = {
-  id: string;
-  countries: string[];
-  live: number;
-  matched: number;
-  fresh: number;
-};
+export type Job = Schemas["JobOut"];
+export type JobStatus = Job["status"];
+export type JobSummary = Schemas["JobSummary"];
+export type OverlapJob = Schemas["OverlapJob"];
+export type OverlapPreview = Schemas["OverlapPreview"];
+export type PlaceReport = Schemas["PlaceReport"];
+export type SliceCap = Schemas["SliceCap"];
+export type SearchAnalysis = Schemas["AnalysisOut"];
 
-export type OverlapPreview = {
-  fresh: number;
-  jobs: OverlapJob[];
-};
+export type Preset = Schemas["PresetOut"];
+export type GeoCatalog = Schemas["GeoCatalog"];
 
-export type PlaceReport = {
-  location: string;
-  reported: number | null;
-  fetched: number | null;
-  inserted: number | null;
-  updated: number | null;
-  duplicates: number | null;
-  status: string;
-};
+export type OutreachStatus = Schemas["OutreachStatusOut"];
+export type Contact = Schemas["ContactOut"];
+export type ContactPage = Schemas["ContactPageOut"];
+export type ContactLogins = Schemas["ContactLoginsOut"];
 
-export type SliceCap = {
-  location: string | null;
-  start: string | null;
-  end: string | null;
-  reason: string;
-  reported: number | null;
-  fetched: number | null;
-};
+export type Campaign = Schemas["CampaignOut"];
+export type CampaignStatus = Campaign["status"];
+export type CampaignDraft = Schemas["CampaignCreate"];
+export type MailCheckResult = Schemas["MailCheckOk"] | Schemas["MailCheckFailed"];
 
-export type SearchAnalysis = {
-  stop_reason: string;
-  headline: string;
-  limit: number;
-  live: number;
-  inserted: number;
-  updated: number | null;
-  duplicates: number | null;
-  slots: number;
-  shortfall: number;
-  moved_out: number | null;
-  window: { start: string; end: string } | null;
-  places_known: number;
-  places_unknown: number;
-  places: PlaceReport[];
-  caps: SliceCap[];
-  already_saved: OverlapJob[];
-  covered_countries: string[];
-  uncollected_countries: string[];
-  suggestions: string[];
-};
-
-export type Job = {
-  id: string;
-  status: JobStatus;
-  criteria: SearchCriteria;
-  incomplete: boolean;
-  incomplete_reasons: string[];
-  counts: {
-    discovered: number;
-    enriched: number;
-    errors: number;
-    emails: number;
-    linkedin_without_email: number;
-  };
-  overlap_preview: OverlapPreview | null;
-  error: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-export type Preset = {
-  id: string;
-  name: string;
-  criteria: SearchCriteria;
-  created_at: string | null;
-};
-
-export type OutreachStatus = {
-  id: string;
-  label: string;
-  position: number;
-};
-
-export type Contact = {
-  login: string;
-  name: string | null;
-  profile_url: string;
-  public_email: string | null;
-  email_kinds: Array<"personal" | "other">;
-  linkedin_url: string | null;
-  country: string | null;
-  outreach_status: string | null;
-  last_checked_at: string | null;
-  job_id: string | null;
-};
-
+/** Query parameters for GET /api/contacts and /api/contacts/logins. */
 export type ContactQuery = {
   page?: number;
   page_size?: number;
@@ -131,65 +41,6 @@ export type ContactQuery = {
   country?: string[];
   q?: string;
   job_id?: string;
-};
-
-export type ContactPage = {
-  contacts: Contact[];
-  total: number;
-  page: number;
-  page_size: number;
-};
-
-export type JobSummary = {
-  id: string;
-  status: JobStatus;
-  created_at: string | null;
-};
-
-export type CampaignStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
-
-export type Campaign = {
-  id: string;
-  status: CampaignStatus;
-  subject: string;
-  body: string;
-  hourly_limit: number;
-  delay_min_seconds: number;
-  delay_max_seconds: number;
-  counts: {
-    queued: number;
-    sent: number;
-    failed: number;
-    skipped: number;
-  };
-  failures: Array<{ login: string; error: string | null }>;
-  error: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
-export type MailCheckResult =
-  | { ok: true; from: string; host: string; port: number; sent_folder: string }
-  | { ok: false; detail: string };
-
-export type ContactLogins = {
-  logins: string[];
-  total: number;
-  truncated: boolean;
-};
-
-export type CampaignDraft = {
-  logins: string[];
-  subject: string;
-  body: string;
-  hourly_limit: number;
-  delay_min_seconds: number;
-  delay_max_seconds: number;
-};
-
-export type GeoCatalog = {
-  countries: string[];
-  us_states: string[];
 };
 
 export const UNITED_STATES = "United States";
