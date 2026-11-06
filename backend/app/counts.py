@@ -20,6 +20,8 @@ counter from the collections and is migration 3.
 
 from collections.abc import Iterable
 
+from app.database import Database
+
 CONTACT_KINDS = ("email", "linkedin")
 CONTACT_COUNTS = ("emails", "linkedin_without_email")
 JOB_COUNTS = ("discovered", "enriched", *CONTACT_COUNTS)
@@ -59,7 +61,7 @@ def zero_share() -> dict[str, int]:
     return dict.fromkeys(JOB_COUNTS, 0)
 
 
-async def evidence_kinds(db, github_user_id: int) -> list[dict]:
+async def evidence_kinds(db: Database, github_user_id: int) -> list[dict]:
     cursor = db.contact_evidence.find(
         {"github_user_id": github_user_id, "kind": {"$in": list(CONTACT_KINDS)}},
         {"kind": 1},
@@ -68,7 +70,7 @@ async def evidence_kinds(db, github_user_id: int) -> list[dict]:
 
 
 async def credit_candidate(
-    db,
+    db: Database,
     job_id: str,
     candidate: dict,
     evidence: list[dict] | None = None,
@@ -95,7 +97,7 @@ async def credit_candidate(
     return share
 
 
-async def recount_jobs(db) -> int:
+async def recount_jobs(db: Database) -> int:
     """Rebuild every job's counters and every candidate's recorded share.
 
     Streams the candidate and evidence collections once each instead of loading

@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from app.database import Database
 from app.extract import normalize_email
 
 PERSONAL_EMAIL_DOMAINS = frozenset(
@@ -170,7 +171,7 @@ def evidence_for(grouped: dict[int, list[dict]], candidate: dict) -> list[dict]:
     return grouped.get(user_id, [])
 
 
-async def evidence_by_user(db, user_ids: list[int]) -> dict[int, list[dict]]:
+async def evidence_by_user(db: Database, user_ids: list[int]) -> dict[int, list[dict]]:
     grouped: dict[int, list[dict]] = {user_id: [] for user_id in user_ids}
     if not user_ids:
         return grouped
@@ -185,7 +186,7 @@ async def evidence_by_user(db, user_ids: list[int]) -> dict[int, list[dict]]:
 _BACKFILL_BATCH = 200
 
 
-async def backfill_contact_filters(db) -> int:
+async def backfill_contact_filters(db: Database) -> int:
     """Fill email and LinkedIn flags on candidates that do not have them yet."""
 
     updated = 0

@@ -2,11 +2,12 @@ import socket
 from datetime import UTC, date, datetime
 from urllib.parse import urlsplit
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConfigurationError, ServerSelectionTimeoutError
 
 from app.config import FORBIDDEN_DATABASES, Settings
 from app.contacts import SEED_STATUSES
+from app.database import Client, Database
 
 
 def utcnow() -> datetime:
@@ -24,7 +25,7 @@ def assert_database_allowed(name: str) -> None:
         raise RuntimeError(f"Refusing to open database {name}")
 
 
-async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
+async def ensure_indexes(db: Database) -> None:
     """Create FetchIQ collections and their indexes. Safe to call more than once.
 
     Only indexes and the status catalog are written here. Data repairs live in
@@ -72,7 +73,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     )
 
 
-async def ensure_outreach_statuses(db: AsyncIOMotorDatabase) -> None:
+async def ensure_outreach_statuses(db: Database) -> None:
     """Seed the status catalog once. Later edits stay as the user left them."""
 
     await db.outreach_statuses.create_index([("label", 1)], unique=True, name="uniq_status_label")
@@ -137,18 +138,18 @@ def _is_dns_failure(exc: BaseException) -> bool:
     return False
 
 
-def _close_client(client: AsyncIOMotorClient | None) -> None:
+def _close_client(client: Client | None) -> None:
     if client is not None:
         client.close()
 
 
-async def connect(settings: Settings) -> tuple[AsyncIOMotorClient, AsyncIOMotorDatabase]:
+async def connect(settings: Settings) -> tuple[Client, Database]:
     """Open the client and check the server answers. Indexes and migrations run later."""
 
     if not settings.mongodb_uri:
         raise RuntimeError("MONGODB_URI is required")
     assert_database_allowed(settings.database_name)
-    client: AsyncIOMotorClient | None = None
+    client: Client | None = None
     try:
         client = AsyncIOMotorClient(settings.mongodb_uri)
         database = client[settings.database_name]

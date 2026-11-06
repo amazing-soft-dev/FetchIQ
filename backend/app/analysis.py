@@ -8,6 +8,7 @@ moves profiles away.
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from app.database import Database
 from app.dates import account_age_window
 from app.db import isoformat
 from app.geo import COUNTRIES
@@ -171,7 +172,9 @@ async def _overlap_rows(
     return rows
 
 
-async def preview_overlap(db, criteria: SearchCriteria, created_at: datetime) -> dict[str, Any]:
+async def preview_overlap(
+    db: Database, criteria: SearchCriteria, created_at: datetime
+) -> dict[str, Any]:
     """Snapshot who is already saved, computed once when the job is created."""
 
     probe = {
@@ -357,7 +360,7 @@ def _headline(document: dict[str, Any], reason: str, live: int, inserted: int) -
     return "The search is still running."
 
 
-async def build_analysis(db, document: dict[str, Any]) -> dict[str, Any]:
+async def build_analysis(db: Database, document: dict[str, Any]) -> dict[str, Any]:
     reason = stop_reason(document)
     live = await db.candidates.count_documents({"job_id": document["_id"]})
     funnel = document.get("funnel") or {}
