@@ -385,6 +385,11 @@ async def test_profile_api_email_is_stored_and_noreply_is_ignored(db) -> None:
     assert stored["utc_offset"] is None
     emails = await db.contact_evidence.find({"kind": "email"}).to_list(10)
     assert [item["normalized_value"] for item in emails] == ["Ada@example.com"]
+    assert stored["counted"] == {"emails": 1, "linkedin_without_email": 0}
+    job = await db.search_jobs.find_one({"_id": job_id})
+    assert job["counts"]["enriched"] == 1
+    assert job["counts"]["emails"] == 1
+    assert job["counts"]["linkedin_without_email"] == 0
 
 
 def test_utc_offset_formats_half_hours() -> None:
@@ -478,7 +483,7 @@ async def test_reenrich_appends_contacts_and_keeps_stored_linkedin(db) -> None:
     other["status"] = "running"
     other["checkpoint"] = {"phase": "discovery_done", "windows": [], "last_enriched_user_id": None}
     await db.search_jobs.insert_one(other)
-    outcome, _source = await upsert_candidate(
+    outcome, _source, _moved = await upsert_candidate(
         db, other["_id"], {"id": 7, "login": "ada", "html_url": "https://github.com/ada"}
     )
     assert outcome == "updated"

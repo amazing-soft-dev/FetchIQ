@@ -22,6 +22,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.commits import find_commit_email
 from app.contacts import filter_fields, is_blank, latest_valid_email, merge_profile_fields
+from app.counts import credit_candidate
 from app.db import utcnow
 from app.extract import EMAIL_RE, classify_url, extract_published_contacts, normalize_email
 from app.github import RateLimited, rate_limit_budget, wait_out_rate_limit
@@ -416,7 +417,7 @@ class EnrichmentService:
                     "$unset": obsolete,
                 },
             )
-        await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.enriched": 1}})
+        await credit_candidate(self.db, job_id, candidate, evidence, enriched=1)
 
     async def _public_profile(self, profile_url: str) -> tuple[str | None, list[str]]:
         response = await self.github.get_html(profile_url)
@@ -604,7 +605,7 @@ class EnrichmentService:
                 },
             },
         )
-        await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.enriched": 1}})
+        await credit_candidate(self.db, job_id, candidate, enriched=1)
         await self._event(
             job_id,
             "reused",
@@ -635,6 +636,12 @@ class EnrichmentService:
             }
         await self.db.candidates.update_one({"_id": candidate["_id"]}, {"$set": changes})
         await self.db.search_jobs.update_one({"_id": job_id}, {"$inc": {"counts.errors": 1}})
+        await credit_candidate(
+            self.db,
+            job_id,
+            candidate,
+            enriched=int(candidate.get("enrichment_status") == "merge"),
+        )
         await self._event(job_id, status, message, {"login": candidate.get("login")})
         log.warning(
             "enrichment miss",
