@@ -40,7 +40,17 @@ Set `MONGODB_URI` in `.env`, plus the three GitHub App values:
 
 The app needs no repository or organization permissions, since FetchIQ reads only public data. The API refuses to start, naming the setting, when a value is missing or the key file cannot be read. GitHub Enterprise Server works by pointing `GITHUB_API_BASE` at its API root, because the token exchange uses the same base URL. Do not commit `.env` or the key file.
 
-From the repository root, create a virtual environment and install the backend from `backend/requirements.txt`:
+Either run the three parts in containers, or install them on the machine.
+
+**Containers.** With Docker installed, `compose.yaml` at the repository root starts MongoDB, the API on port 8000 and the UI on port 3000 from the same `.env`:
+
+```bash
+docker compose up --build
+```
+
+The key file named by `GITHUB_APP_PRIVATE_KEY_PATH` is mounted read-only into the API container and never copied into an image. `MONGODB_URI` is set to the `mongo` service inside the containers, and its data lives in the `mongo-data` volume. `API_TOKEN` from `.env` is baked into the UI build as `NEXT_PUBLIC_API_TOKEN`, so run the command again with `--build` after changing it. This is a development setup, not a deployment target.
+
+**On the machine.** From the repository root, create a virtual environment and install the backend from `backend/requirements.txt`:
 
 ```bash
 python -m venv .venv
