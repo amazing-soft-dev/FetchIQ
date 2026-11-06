@@ -23,7 +23,7 @@ class _Client:
     def __getitem__(self, name: str) -> _Database:
         return _Database()
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self.closed = True
 
 
@@ -40,7 +40,7 @@ async def test_connect_names_the_host_and_omits_credentials(monkeypatch) -> None
         created.append(client)
         return client
 
-    monkeypatch.setattr("app.db.AsyncIOMotorClient", client_factory)
+    monkeypatch.setattr("app.db.AsyncMongoClient", client_factory)
 
     with pytest.raises(RuntimeError, match="Could not resolve db.internal.example") as caught:
         await connect(_settings())
@@ -59,7 +59,7 @@ async def test_connect_names_the_host_for_a_dns_configuration_error(monkeypatch)
             "The DNS query name does not exist: _mongodb._tcp.db.internal.example."
         )
 
-    monkeypatch.setattr("app.db.AsyncIOMotorClient", client_factory)
+    monkeypatch.setattr("app.db.AsyncMongoClient", client_factory)
 
     with pytest.raises(RuntimeError, match="Could not resolve db.internal.example") as caught:
         await connect(_settings())
@@ -74,7 +74,7 @@ async def test_connect_keeps_a_configuration_error_that_is_not_dns(monkeypatch) 
     def client_factory(_uri: str) -> _Client:
         raise ConfigurationError("Collation is unsupported for unacknowledged writes.")
 
-    monkeypatch.setattr("app.db.AsyncIOMotorClient", client_factory)
+    monkeypatch.setattr("app.db.AsyncMongoClient", client_factory)
 
     with pytest.raises(ConfigurationError, match="Collation"):
         await connect(_settings())

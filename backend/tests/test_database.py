@@ -12,10 +12,10 @@ def test_the_test_driver_satisfies_the_protocols() -> None:
     assert isinstance(database.candidates.find({}), Cursor)
 
 
-def test_the_production_driver_satisfies_the_protocols() -> None:
-    from motor.motor_asyncio import AsyncIOMotorClient
+async def test_the_production_driver_satisfies_the_protocols() -> None:
+    from pymongo import AsyncMongoClient
 
-    client = AsyncIOMotorClient("mongodb://localhost:27017", connect=False)
+    client = AsyncMongoClient("mongodb://localhost:27017", connect=False)
     try:
         database = client["fetchiq_test"]
         assert isinstance(client, Client)
@@ -23,4 +23,4 @@ def test_the_production_driver_satisfies_the_protocols() -> None:
         assert isinstance(database.candidates, Collection)
         assert isinstance(database.candidates.find({}), Cursor)
     finally:
-        client.close()
+        await client.close()
