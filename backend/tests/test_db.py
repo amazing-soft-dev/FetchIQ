@@ -35,7 +35,7 @@ def _settings() -> SimpleNamespace:
 async def test_connect_names_the_host_and_omits_credentials(monkeypatch) -> None:
     created: list[_Client] = []
 
-    def client_factory(uri: str) -> _Client:
+    def client_factory(uri: str, **_options) -> _Client:
         client = _Client(uri)
         created.append(client)
         return client
@@ -54,7 +54,7 @@ async def test_connect_names_the_host_and_omits_credentials(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_connect_names_the_host_for_a_dns_configuration_error(monkeypatch) -> None:
-    def client_factory(_uri: str) -> _Client:
+    def client_factory(_uri: str, **_options) -> _Client:
         raise ConfigurationError(
             "The DNS query name does not exist: _mongodb._tcp.db.internal.example."
         )
@@ -71,7 +71,7 @@ async def test_connect_names_the_host_for_a_dns_configuration_error(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_connect_keeps_a_configuration_error_that_is_not_dns(monkeypatch) -> None:
-    def client_factory(_uri: str) -> _Client:
+    def client_factory(_uri: str, **_options) -> _Client:
         raise ConfigurationError("Collation is unsupported for unacknowledged writes.")
 
     monkeypatch.setattr("app.db.AsyncMongoClient", client_factory)

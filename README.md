@@ -118,7 +118,7 @@ Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SSL`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and 
 
 ## Tests
 
-Backend tests use an in-memory MongoDB (`fetchiq_test`), not a shared cluster.
+Backend tests run against a real MongoDB at `MONGODB_URI` (default `mongodb://localhost:27017`; `docker compose up mongo` provides one). Each test creates its own `fetchiq_test_<id>` database and drops it when it ends, so a shared server is never written to outside those names.
 
 With `.venv` activated:
 

@@ -219,3 +219,28 @@ async def test_campaign_resume_claims_only_lapsed_leases(db, monkeypatch) -> Non
     assert sorted(started) == ["lapsed", "legacy"]
     assert (await db.campaigns.find_one({"_id": "held"}))["worker_id"] == "other"
     assert (await db.campaigns.find_one({"_id": "lapsed"}))["worker_id"] == WORKER_ID
+
+
+async def test_shutdown_cancels_in_flight_runs_and_keeps_the_lease(db, monkeypatch) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run(self, job_id: str) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(JobRunner, "_run", fake_run)
+    job = _job(status="queued")
+    await db.search_jobs.insert_one(job)
+    runner = JobRunner(db, None)
+    runner.start_sweeper(interval=0.01)
+    await runner.kick(job["_id"])
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await runner.shutdown()
+
+    assert runner._tasks[job["_id"]].cancelled()
+    assert runner._sweeper is None
+    stored = await db.search_jobs.find_one({"_id": job["_id"]})
+    assert stored["status"] == "running"
+    assert stored["worker_id"] == WORKER_ID

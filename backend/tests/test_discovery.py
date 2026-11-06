@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pymongo.asynchronous.collection import AsyncCollection
 
 from app.config import Settings
 from app.counts import recount_jobs
@@ -773,15 +774,21 @@ async def test_job_poll_reads_only_the_job_document(db, monkeypatch) -> None:
     )
     transport = ASGITransport(app=app)
 
-    def refuse(*_args, **_kwargs):
-        raise AssertionError("a job poll must not read candidates or evidence")
+    def guarded(method: str):
+        original = getattr(AsyncCollection, method)
+
+        def call(self, *args, **kwargs):
+            if self.name in {"candidates", "contact_evidence"}:
+                raise AssertionError("a job poll must not read candidates or evidence")
+            return original(self, *args, **kwargs)
+
+        return call
 
     async with app.router.lifespan_context(app):
         # Startup recounts every job; set the counters this poll must echo after that.
         await db.search_jobs.update_one({"_id": job["_id"]}, {"$set": {"counts": job["counts"]}})
-        for collection in (db.candidates, db.contact_evidence):
-            for method in ("find", "find_one", "count_documents", "aggregate", "distinct"):
-                monkeypatch.setattr(collection, method, refuse)
+        for method in ("find", "find_one", "count_documents", "aggregate", "distinct"):
+            monkeypatch.setattr(AsyncCollection, method, guarded(method))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get(f"/api/jobs/{job['_id']}")
     await github.aclose()

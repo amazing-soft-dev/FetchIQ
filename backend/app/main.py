@@ -84,8 +84,8 @@ def create_app(
         app.state.campaigns.start_sweeper()
         yield
         log.info("api stopping")
-        await app.state.runner.stop_sweeper()
-        await app.state.campaigns.stop_sweeper()
+        await app.state.runner.shutdown()
+        await app.state.campaigns.shutdown()
         if owns_github:
             await app.state.github.aclose()
         if owns_client and app.state.mongo_client is not None:

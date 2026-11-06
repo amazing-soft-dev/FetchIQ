@@ -17,12 +17,27 @@ concurrency:
 jobs:
   backend:
     name: Backend (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # Pinned: MongoDB 8 refuses to start on Linux kernels from 6.19 up to 7.0.13 (a
+    # tcmalloc rseq incompatibility; 8.0.30 and 8.3.9 lift the guard for 7.0.14 and
+    # newer, see https://jira.mongodb.org/browse/SERVER-125742). ubuntu-latest and
+    # ubuntu-24.04 ship kernel 7.0.0; ubuntu-22.04 ships 6.8. Move back to
+    # ubuntu-latest once the runner images carry kernel 7.0.14 or newer.
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         python: ["3.12", "3.13", "3.14"]
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -51,6 +66,7 @@ jobs:
         run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml
         env:
           DATABASE_NAME: fetchiq_test
+          MONGODB_URI: mongodb://localhost:27017
 
       - name: Upload coverage report
         if: always()

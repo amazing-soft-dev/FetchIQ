@@ -1,7 +1,7 @@
 """Contact review helpers: personal inboxes, profile merges, and list filters."""
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.database import Database
@@ -77,10 +77,12 @@ def is_blank(value: object) -> bool:
 
 
 def _stamp(document: dict) -> datetime:
+    """When the evidence was last seen, always timezone-aware so rows compare."""
+
     value = document.get("last_seen_at") or document.get("created_at")
     if isinstance(value, datetime):
-        return value
-    return datetime.min
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _valid_items(evidence: list[dict], kind: str) -> list[dict]:
