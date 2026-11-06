@@ -13,7 +13,7 @@ import type {
   SearchCriteria,
 } from "./types";
 
-async function errorMessage(response: Response): Promise<string> {
+export async function errorMessage(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
