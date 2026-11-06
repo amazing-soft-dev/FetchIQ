@@ -17,9 +17,11 @@ concurrency:
 jobs:
   backend:
     name: Backend (Python ${{ matrix.python }})
-    # Pinned: ubuntu-latest (26.04) runs a Linux kernel MongoDB 8 refuses to start on
-    # (https://jira.mongodb.org/browse/SERVER-121912). Move back once a fixed release ships.
-    runs-on: ubuntu-24.04
+    # Pinned: MongoDB 8.0+ crashes on Linux kernels 6.19 and newer (tcmalloc rseq,
+    # https://jira.mongodb.org/browse/SERVER-125742), and both ubuntu-latest and
+    # ubuntu-24.04 now ship such kernels. ubuntu-22.04 runs kernel 6.8. Move back to
+    # ubuntu-latest once a MongoDB 8 release with the fix is published.
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
