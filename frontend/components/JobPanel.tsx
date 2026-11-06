@@ -3,15 +3,14 @@
 import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import { exportHref, getAnalysis, getJob, postJobAction } from "../lib/api";
-import type { Job, JobStatus, SearchAnalysis } from "../lib/types";
+import { exportHref } from "../lib/api";
+import { ACTIVE_JOB_STATUSES, useJob, useJobAction, useJobAnalysis } from "../lib/queries";
+import type { JobStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
-
-const ACTIVE: JobStatus[] = ["queued", "running", "paused"];
 
 const tone: Record<JobStatus, string> = {
   queued: "text-muted",
@@ -23,93 +22,32 @@ const tone: Record<JobStatus, string> = {
   cancelled: "text-muted",
 };
 
+function message(reason: unknown, fallback: string): string {
+  return reason instanceof Error ? reason.message : fallback;
+}
+
 export function JobPanel({ jobId }: { jobId: string }) {
   const router = useRouter();
-  const [job, setJob] = useState<Job | null>(null);
-  const [analysis, setAnalysis] = useState<{
-    jobId: string;
-    report: SearchAnalysis;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const jobQuery = useJob(jobId);
+  const job = jobQuery.data ?? null;
+  const analysisQuery = useJobAnalysis(jobId, job?.status);
+  const shownAnalysis = analysisQuery.data ?? null;
+  const action = useJobAction(jobId);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [includeNoContact, setIncludeNoContact] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const keepError = useRef(false);
-  const requestedAnalysis = useRef<string | null>(null);
-  const shownAnalysis = analysis?.jobId === jobId ? analysis.report : null;
-  const status = job?.status;
+  const busy = action.isPending;
+  const loadError = jobQuery.error ? message(jobQuery.error, "Could not load the job.") : null;
+  const error = actionError ?? loadError;
 
-  useEffect(() => {
-    if (!status || requestedAnalysis.current === jobId) {
-      return;
-    }
-    const terminal: JobStatus[] = ["succeeded", "incomplete", "failed", "cancelled"];
-    if (!terminal.includes(status)) {
-      return;
-    }
-    requestedAnalysis.current = jobId;
-    let cancelled = false;
-    void getAnalysis(jobId)
-      .then((report) => {
-        if (!cancelled) {
-          setAnalysis({ jobId, report });
-        }
-      })
-      .catch(() => {
-        if (!cancelled && requestedAnalysis.current === jobId) {
-          requestedAnalysis.current = null;
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [status, jobId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        const next = await getJob(jobId);
-        if (!cancelled) {
-          setJob(next);
-          if (!keepError.current) {
-            setError(null);
-          }
-        }
-      } catch (reason) {
-        if (!cancelled) {
-          keepError.current = false;
-          setError(reason instanceof Error ? reason.message : "Could not load the job.");
-        }
-      }
-    }
-
-    void load();
-    const timer = window.setInterval(() => {
-      void load();
-    }, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [jobId]);
-
-  async function act(action: "start" | "pause" | "resume" | "cancel") {
-    setBusy(true);
-    keepError.current = false;
-    setError(null);
+  async function act(kind: "start" | "pause" | "resume" | "cancel") {
+    setActionError(null);
     try {
-      const next = await postJobAction(jobId, action);
-      if (action === "cancel") {
+      await action.mutateAsync(kind);
+      if (kind === "cancel") {
         router.push("/");
-        return;
       }
-      setJob(next);
     } catch (reason) {
-      keepError.current = true;
-      setError(reason instanceof Error ? reason.message : "Could not update the job.");
-    } finally {
-      setBusy(false);
+      setActionError(message(reason, "Could not update the job."));
     }
   }
 
@@ -139,7 +77,7 @@ export function JobPanel({ jobId }: { jobId: string }) {
               )}
             >
               {job.status}
-              {ACTIVE.includes(job.status) ? (
+              {ACTIVE_JOB_STATUSES.includes(job.status) ? (
                 <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden="true" />
               ) : null}
             </motion.p>

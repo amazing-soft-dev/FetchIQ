@@ -2,22 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import {
-  checkMailbox,
-  createCampaign,
-  getActiveCampaign,
-  getCampaign,
-  postCampaignAction,
-} from "../lib/api";
+import { checkMailbox, createCampaign } from "../lib/api";
 import { renderMessage, unknownPlaceholders } from "../lib/message";
+import {
+  ACTIVE_CAMPAIGN_STATUSES,
+  useActiveCampaign,
+  useCampaign,
+  useCampaignAction,
+  useSeedCampaign,
+} from "../lib/queries";
 import { messageDraftError } from "../lib/schemas";
 import type { Campaign, Contact } from "../lib/types";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Field } from "./ui/field";
 import { Input, Textarea } from "./ui/input";
-
-const ACTIVE = new Set(["queued", "running", "paused"]);
 
 type MailConnection =
   | { state: "unchecked" }
@@ -33,94 +32,70 @@ type Props = {
   onDelivered: () => void;
 };
 
+function message(reason: unknown, fallback: string): string {
+  return reason instanceof Error ? reason.message : fallback;
+}
+
 export function MessageComposer({ open, selected, contacts, onClose, onDelivered }: Props) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [hourlyLimit, setHourlyLimit] = useState(30);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  // The send this dialog started or acted on, and whether the user dismissed the panel.
+  const [ownCampaign, setOwnCampaign] = useState<Campaign | null>(null);
+  const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [mailConnection, setMailConnection] = useState<MailConnection>({ state: "unchecked" });
   const delivered = useRef(0);
+  const seenCampaign = useRef<string | null>(null);
   const notify = useRef(onDelivered);
 
   useEffect(() => {
     notify.current = onDelivered;
   }, [onDelivered]);
 
+  // The send in progress when the page opened, unless the user dismissed it.
+  const activeQuery = useActiveCampaign();
+  const inherited = dismissed ? null : (activeQuery.data ?? null);
+  const campaignId = ownCampaign?.id ?? inherited?.id ?? null;
+  // Polled while queued or running; the latest poll wins over the copy we hold.
+  const campaignQuery = useCampaign(campaignId, ownCampaign?.status ?? inherited?.status);
+  const polled = campaignQuery.data?.id === campaignId ? campaignQuery.data : undefined;
+  const campaign = campaignId === null ? null : (polled ?? ownCampaign ?? inherited);
+  const campaignAction = useCampaignAction();
+  const seedCampaign = useSeedCampaign();
+  const loadFailure = activeQuery.error ?? campaignQuery.error;
+  const shownError =
+    error ?? (loadFailure ? message(loadFailure, "Could not load the message send.") : null);
+
+  // Tell the contacts list when more messages have gone out since the last look.
+  useEffect(() => {
+    if (!campaign) {
+      return;
+    }
+    if (seenCampaign.current !== campaign.id) {
+      seenCampaign.current = campaign.id;
+      delivered.current = campaign.counts.sent;
+      return;
+    }
+    if (campaign.counts.sent > delivered.current) {
+      delivered.current = campaign.counts.sent;
+      notify.current();
+    }
+  }, [campaign]);
+
   const preview = selected
     .map((login) => contacts.find((contact) => contact.login === login))
     .find((contact): contact is Contact => Boolean(contact));
   const unknown = unknownPlaceholders(subject, body);
-  const active = campaign !== null && ACTIVE.has(campaign.status);
+  const active = campaign !== null && ACTIVE_CAMPAIGN_STATUSES.includes(campaign.status);
   const loadedWithoutEmail = selected.filter((login) => {
     const contact = contacts.find((item) => item.login === login);
     return contact !== undefined && !contact.public_email;
   }).length;
   const draftProblem = messageDraftError({ subject, body, hourlyLimit, delayMin, delayMax });
-
-  useEffect(() => {
-    let cancelled = false;
-    getActiveCampaign()
-      .then((next) => {
-        if (!cancelled && next) {
-          delivered.current = next.counts.sent;
-          setCampaign(next);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "Could not load the message send.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const campaignId = campaign?.id ?? null;
-  const campaignStatus = campaign?.status ?? null;
-
-  useEffect(() => {
-    if (
-      !campaignId ||
-      !campaignStatus ||
-      !ACTIVE.has(campaignStatus) ||
-      campaignStatus === "paused"
-    ) {
-      return;
-    }
-    const id = campaignId;
-    let cancelled = false;
-
-    async function refresh() {
-      try {
-        const next = await getCampaign(id);
-        if (cancelled) {
-          return;
-        }
-        setCampaign(next);
-        if (next.counts.sent > delivered.current) {
-          delivered.current = next.counts.sent;
-          notify.current();
-        }
-      } catch (reason: unknown) {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "Could not load the message send.");
-        }
-      }
-    }
-
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [campaignId, campaignStatus]);
 
   async function checkConnection() {
     setMailConnection({ state: "checking" });
@@ -141,7 +116,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     } catch (reason: unknown) {
       setMailConnection({
         state: "failed",
-        detail: reason instanceof Error ? reason.message : "Could not check the mailbox.",
+        detail: message(reason, "Could not check the mailbox."),
       });
     }
   }
@@ -171,11 +146,12 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
         delay_min_seconds: delayMin,
         delay_max_seconds: delayMax,
       });
-      delivered.current = next.counts.sent;
-      setCampaign(next);
+      seedCampaign(next);
+      setOwnCampaign(next);
+      setDismissed(false);
       onClose();
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "Could not start the message send.");
+      setError(message(reason, "Could not start the message send."));
     } finally {
       setBusy(false);
     }
@@ -188,12 +164,17 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     setBusy(true);
     setError(null);
     try {
-      setCampaign(await postCampaignAction(campaign.id, action));
+      setOwnCampaign(await campaignAction.mutateAsync({ campaignId: campaign.id, action }));
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "Could not update the message send.");
+      setError(message(reason, "Could not update the message send."));
     } finally {
       setBusy(false);
     }
+  }
+
+  function dismiss() {
+    setOwnCampaign(null);
+    setDismissed(true);
   }
 
   const progress = campaign ? (
@@ -229,7 +210,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
             Cancel
           </Button>
         ) : (
-          <Button type="button" variant="secondary" onClick={() => setCampaign(null)}>
+          <Button type="button" variant="secondary" onClick={dismiss}>
             Dismiss
           </Button>
         )}
@@ -258,7 +239,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
             public email is the address the message is sent to.
           </DialogDescription>
           <div className="mt-4 flex flex-col gap-3">
-            {error ? <p className="text-sm text-danger">{error}</p> : null}
+            {shownError ? <p className="text-sm text-danger">{shownError}</p> : null}
             {open && !active ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">
