@@ -11,9 +11,8 @@ import io
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from dateutil.relativedelta import relativedelta
-
 from app.contacts import candidate_user_ids, evidence_by_user, evidence_for
+from app.dates import months_between
 from app.db import utcnow
 
 COLUMNS = [
@@ -114,8 +113,7 @@ def _age_months(created: object, checked: datetime | None) -> str:
     end = checked or utcnow()
     if end.tzinfo is None:
         end = end.replace(tzinfo=UTC)
-    delta = relativedelta(end, start)
-    return str(delta.years * 12 + delta.months)
+    return str(months_between(start, end))
 
 
 def _plain_number(value: object) -> str:
