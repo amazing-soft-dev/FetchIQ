@@ -2,8 +2,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.auth import require_token
 from app.campaigns import CampaignRunner
@@ -14,6 +15,7 @@ from app.github_auth import GitHubAppAuth
 from app.logs import configure_logging
 from app.mail import Mailer, SmtpMailer
 from app.migrations import run_migrations
+from app.readiness import is_ready, readiness_checks
 from app.routes.campaigns import router as campaigns_router
 from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
@@ -103,7 +105,20 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
+        """Liveness: constant while the process runs."""
+
         return {"status": "ok"}
+
+    @app.get("/api/ready")
+    async def ready(request: Request) -> JSONResponse:
+        """Readiness: MongoDB answers and the GitHub App token can be minted."""
+
+        checks = await readiness_checks(request.app)
+        ok = is_ready(checks)
+        return JSONResponse(
+            {"status": "ok" if ok else "failed", "checks": checks},
+            status_code=200 if ok else 503,
+        )
 
     return app
 

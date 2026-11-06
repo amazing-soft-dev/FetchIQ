@@ -193,6 +193,10 @@ class GitHubClient:
             follow_redirects=False,
         )
 
+    @property
+    def auth(self) -> TokenSource:
+        return self._auth
+
     async def aclose(self) -> None:
         await self._client.aclose()
         await self._auth.aclose()
