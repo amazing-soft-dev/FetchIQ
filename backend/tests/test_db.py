@@ -8,13 +8,20 @@ from app.db import connect
 _URI = "mongodb://reader:supersecret@db.internal.example:27017"
 
 
+class _Database:
+    async def command(self, _name: str) -> dict:
+        raise ServerSelectionTimeoutError(
+            "db.internal.example:27017: [Errno 11001] getaddrinfo failed"
+        )
+
+
 class _Client:
     def __init__(self, uri: str) -> None:
         self.uri = uri
         self.closed = False
 
-    def __getitem__(self, name: str) -> dict:
-        return {"name": name}
+    def __getitem__(self, name: str) -> _Database:
+        return _Database()
 
     def close(self) -> None:
         self.closed = True
@@ -33,13 +40,7 @@ async def test_connect_names_the_host_and_omits_credentials(monkeypatch) -> None
         created.append(client)
         return client
 
-    async def fail(_database) -> None:
-        raise ServerSelectionTimeoutError(
-            "db.internal.example:27017: [Errno 11001] getaddrinfo failed"
-        )
-
     monkeypatch.setattr("app.db.AsyncIOMotorClient", client_factory)
-    monkeypatch.setattr("app.db.ensure_indexes", fail)
 
     with pytest.raises(RuntimeError, match="Could not resolve db.internal.example") as caught:
         await connect(_settings())

@@ -69,6 +69,8 @@ npm run dev
 
 The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
+Data migrations are versioned in `backend/app/migrations.py` and recorded in the `schema_version` collection. The API applies pending ones at startup, before it creates indexes. To apply them ahead of a deploy, or to see what is pending, run `python scripts/migrate.py` (or `--dry-run`) from `backend/`.
+
 The API writes one JSON object per line to stderr for startup, job and campaign state changes, GitHub rate-limit waits, enrichment misses, and message sends. `LOG_LEVEL` (default `INFO`) sets the level. Tokens, passwords, and recipient addresses are never logged.
 
 ## Jobs
