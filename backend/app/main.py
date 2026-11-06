@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,12 +11,15 @@ from app.contacts import backfill_contact_filters
 from app.db import connect, ensure_indexes
 from app.github import GitHubClient
 from app.github_auth import GitHubAppAuth
+from app.logs import configure_logging
 from app.mail import Mailer, SmtpMailer
 from app.routes.campaigns import router as campaigns_router
 from app.routes.contacts import router as contacts_router
 from app.routes.jobs import router as jobs_router
 from app.routes.presets import router as presets_router
 from app.runner import JobRunner
+
+log = logging.getLogger(__name__)
 
 
 def create_app(
@@ -27,10 +31,19 @@ def create_app(
     campaigns: CampaignRunner | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    configure_logging(settings.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
+        log.info(
+            "api starting",
+            extra={
+                "database": settings.database_name,
+                "github_api_base": settings.github_api_base,
+                "mail_configured": bool(settings.smtp_username and settings.smtp_from),
+            },
+        )
         owns_client = False
         owns_github = False
         app_github = github
@@ -63,6 +76,7 @@ def create_app(
         await app.state.campaigns.copy_sent()
         await app.state.campaigns.recover_connection_failures()
         yield
+        log.info("api stopping")
         if owns_github:
             await app.state.github.aclose()
         if owns_client and app.state.mongo_client is not None:

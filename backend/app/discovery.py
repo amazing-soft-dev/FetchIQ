@@ -1,6 +1,7 @@
 """GitHub user search with date splits, checkpoints, and one row per username."""
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -29,6 +30,8 @@ from app.slots import (
     reallocate,
     taken,
 )
+
+log = logging.getLogger(__name__)
 
 SEARCH_RESULT_CAP = 1000
 PAGE_SIZE = 100
@@ -1041,6 +1044,10 @@ class DiscoveryService:
             {"$set": {"status": status, "control": None, "updated_at": utcnow()}},
         )
         await self._event(job_id, status, f"Job {status}", {})
+        log.info(
+            "job control applied",
+            extra={"job_id": job_id, "status": status, "stage": "discovery"},
+        )
 
     async def _wait_through_rate_limit(
         self, job_id: str, checkpoint: dict, exc: RateLimited
@@ -1054,6 +1061,16 @@ class DiscoveryService:
             "rate_limited",
             "Waiting for the GitHub rate limit to reset",
             {"retry_after_seconds": exc.retry_after},
+        )
+        log.warning(
+            "github rate limit reached",
+            extra={
+                "job_id": job_id,
+                "stage": "discovery",
+                "retry_after_seconds": exc.retry_after,
+                "reset_at": exc.reset_at,
+                "remaining": exc.remaining,
+            },
         )
 
         async def stopped() -> str | None:

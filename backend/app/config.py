@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.logs import normalize_level
+
 FORBIDDEN_DATABASES = frozenset({"AIMS_local", "AthensDB", "admin", "config", "local"})
 
 # pydantic-settings resolves a relative env_file from the process cwd. Uvicorn is
@@ -34,6 +36,7 @@ class Settings(BaseSettings):
     imap_host: str = "imap.hostinger.com"
     imap_port: int = 993
     imap_ssl: bool = True
+    log_level: str = "INFO"
 
     @field_validator("github_app_private_key_path")
     @classmethod
@@ -45,6 +48,11 @@ class Settings(BaseSettings):
             return ""
         path = Path(cleaned).expanduser()
         return str(path if path.is_absolute() else _REPO_ROOT / path)
+
+    @field_validator("log_level")
+    @classmethod
+    def log_level_is_known(cls, value: str) -> str:
+        return normalize_level(value)
 
     @field_validator("database_name")
     @classmethod
