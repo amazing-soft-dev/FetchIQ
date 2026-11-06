@@ -69,6 +69,8 @@ npm run dev
 
 The frontend proxies `/api` to `http://127.0.0.1:8000`.
 
+The API is open by default, which is fine while it listens on localhost only. Before pointing it at any other host, set `API_TOKEN` in `.env`: every request then needs `Authorization: Bearer <token>`, and the two CSV export links also accept `?token=<token>` because the browser opens them without headers. Put the same value in `frontend/.env.local` as `NEXT_PUBLIC_API_TOKEN` so the UI sends it; Next bakes that value into the client bundle at build time, so rebuild after changing it. `/api/health` stays open for liveness checks.
+
 Data migrations are versioned in `backend/app/migrations.py` and recorded in the `schema_version` collection. The API applies pending ones at startup, before it creates indexes. To apply them ahead of a deploy, or to see what is pending, run `python scripts/migrate.py` (or `--dry-run`) from `backend/`.
 
 The API writes one JSON object per line to stderr for startup, job and campaign state changes, GitHub rate-limit waits, enrichment misses, and message sends. `LOG_LEVEL` (default `INFO`) sets the level. Tokens, passwords, and recipient addresses are never logged.

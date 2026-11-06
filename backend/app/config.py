@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_ssl: bool = True
     log_level: str = "INFO"
+    # When set, every API request must carry Authorization: Bearer <token>.
+    api_token: str = ""
 
     @field_validator("github_app_private_key_path")
     @classmethod
@@ -48,6 +50,11 @@ class Settings(BaseSettings):
             return ""
         path = Path(cleaned).expanduser()
         return str(path if path.is_absolute() else _REPO_ROOT / path)
+
+    @field_validator("api_token")
+    @classmethod
+    def api_token_is_trimmed(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("log_level")
     @classmethod

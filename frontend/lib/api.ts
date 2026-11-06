@@ -14,6 +14,13 @@ import type {
   SearchCriteria,
 } from "./types";
 
+export // Baked into the client bundle at build time. Empty means the API runs without a guard.
+const API_TOKEN = (process.env.NEXT_PUBLIC_API_TOKEN ?? "").trim();
+
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
 export async function errorMessage(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
@@ -43,6 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...authHeaders(),
       ...init?.headers,
     },
   });
@@ -218,7 +226,7 @@ export function listJobs(): Promise<JobSummary[]> {
 export async function downloadContacts(logins: string[]): Promise<void> {
   const response = await fetch("/api/contacts/export.csv", {
     method: "POST",
-    headers: { Accept: "text/csv", "Content-Type": "application/json" },
+    headers: { Accept: "text/csv", "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ logins }),
   });
   if (!response.ok) {
@@ -237,5 +245,8 @@ export function exportHref(jobId: string, includeNoContact: boolean): string {
   const params = new URLSearchParams({
     include_no_contact: includeNoContact ? "true" : "false",
   });
+  if (API_TOKEN) {
+    params.set("token", API_TOKEN);
+  }
   return `/api/jobs/${jobId}/export.csv?${params.toString()}`;
 }
