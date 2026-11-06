@@ -41,7 +41,7 @@ async def main(dry_run: bool) -> int:
         print("applied: " + ", ".join(str(number) for number in applied))
         return 0
     finally:
-        client.close()
+        await client.close()
 
 
 if __name__ == "__main__":

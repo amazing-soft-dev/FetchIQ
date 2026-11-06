@@ -89,7 +89,7 @@ def create_app(
         if owns_github:
             await app.state.github.aclose()
         if owns_client and app.state.mongo_client is not None:
-            app.state.mongo_client.close()
+            await app.state.mongo_client.close()
 
     app = FastAPI(title="FetchIQ", version="0.1.0", lifespan=lifespan)
     app.add_middleware(

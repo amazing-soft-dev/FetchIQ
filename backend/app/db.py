@@ -2,7 +2,7 @@ import socket
 from datetime import UTC, date, datetime
 from urllib.parse import urlsplit
 
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 from pymongo.errors import ConfigurationError, ServerSelectionTimeoutError
 
 from app.config import FORBIDDEN_DATABASES, Settings
@@ -138,9 +138,9 @@ def _is_dns_failure(exc: BaseException) -> bool:
     return False
 
 
-def _close_client(client: Client | None) -> None:
+async def _close_client(client: Client | None) -> None:
     if client is not None:
-        client.close()
+        await client.close()
 
 
 async def connect(settings: Settings) -> tuple[Client, Database]:
@@ -151,11 +151,11 @@ async def connect(settings: Settings) -> tuple[Client, Database]:
     assert_database_allowed(settings.database_name)
     client: Client | None = None
     try:
-        client = AsyncIOMotorClient(settings.mongodb_uri)
+        client = AsyncMongoClient(settings.mongodb_uri)
         database = client[settings.database_name]
         await database.command("ping")
     except (ServerSelectionTimeoutError, ConfigurationError) as exc:
-        _close_client(client)
+        await _close_client(client)
         if isinstance(exc, ConfigurationError) and not _is_dns_failure(exc):
             raise
         raise RuntimeError(f"Could not resolve {_mongodb_host(settings.mongodb_uri)}") from None
