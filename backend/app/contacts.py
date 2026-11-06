@@ -175,7 +175,7 @@ async def evidence_by_user(db, user_ids: list[int]) -> dict[int, list[dict]]:
     if not user_ids:
         return grouped
     cursor = db.contact_evidence.find({"github_user_id": {"$in": user_ids}})
-    for item in await cursor.to_list(None):
+    async for item in cursor:
         user_id = item.get("github_user_id")
         if isinstance(user_id, int):
             grouped.setdefault(user_id, []).append(item)

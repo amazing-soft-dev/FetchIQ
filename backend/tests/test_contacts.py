@@ -209,6 +209,7 @@ async def test_filtered_contacts_page_without_loading_evidence(db) -> None:
     assert [item["login"] for item in second_body["contacts"]] == ["user00"]
     assert "work" not in {item["login"] for item in first_body["contacts"]}
     assert logins.json()["total"] == 26
+    assert logins.json()["truncated"] is False
     assert logins.json()["logins"][0] == "user25"
     assert logins.json()["logins"][-1] == "user00"
     assert "work" not in logins.json()["logins"]
@@ -308,3 +309,68 @@ async def test_contacts_filter_by_country(db) -> None:
 
             logins = await client.get("/api/contacts/logins", params=[("country", "France")])
             assert logins.json()["logins"] == ["grace"]
+
+
+@pytest.mark.asyncio
+async def test_select_all_logins_stops_at_the_cap(db, monkeypatch) -> None:
+    monkeypatch.setattr("app.routes.contacts.LOGIN_CAP", 3)
+    await db.candidates.insert_many(
+        [
+            _candidate(
+                f"user{index}",
+                github_user_id=100 + index,
+                last_checked_at=datetime(2024, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            )
+            for index in range(5)
+        ]
+    )
+    app, transport = await _client(db)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            capped = await client.get("/api/contacts/logins")
+            narrowed = await client.get("/api/contacts/logins", params={"q": "user4"})
+    assert capped.status_code == 200
+    assert capped.json() == {"logins": ["user4", "user3", "user2"], "total": 5, "truncated": True}
+    assert narrowed.json() == {"logins": ["user4"], "total": 1, "truncated": False}
+
+
+@pytest.mark.asyncio
+async def test_contact_export_streams_in_batches_in_order(db, monkeypatch) -> None:
+    monkeypatch.setattr("app.routes.contacts.EXPORT_BATCH", 2)
+    await db.candidates.insert_many(
+        [
+            _candidate(
+                f"user{index}",
+                github_user_id=100 + index,
+                public_email=f"user{index}@example.com",
+                last_checked_at=datetime(2024, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            )
+            for index in range(5)
+        ]
+    )
+    await db.contact_evidence.insert_one(
+        {
+            "github_user_id": 101,
+            "kind": "linkedin",
+            "normalized_value": "https://www.linkedin.com/in/user1",
+            "validation_status": "valid",
+        }
+    )
+    app, transport = await _client(db)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/contacts/export.csv",
+                json={"logins": ["user0", "user1", "user2", "user3", "user4", "missing"]},
+            )
+    assert response.status_code == 200
+    lines = response.text.strip().splitlines()
+    assert len(lines) == 6
+    assert [line.split(",")[0] for line in lines[1:]] == [
+        "user4",
+        "user3",
+        "user2",
+        "user1",
+        "user0",
+    ]
+    assert "https://www.linkedin.com/in/user1" in lines[4]

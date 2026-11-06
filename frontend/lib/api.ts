@@ -2,6 +2,7 @@ import type {
   Campaign,
   CampaignDraft,
   MailCheckResult,
+  ContactLogins,
   ContactPage,
   ContactQuery,
   GeoCatalog,
@@ -130,10 +131,10 @@ export function listContacts(query: ContactQuery): Promise<ContactPage> {
   return request<ContactPage>(`/api/contacts${suffix}`);
 }
 
-export function listContactLogins(query: ContactQuery): Promise<string[]> {
+export function listContactLogins(query: ContactQuery): Promise<ContactLogins> {
   const params = contactParams(query, false);
   const suffix = params.size ? `?${params.toString()}` : "";
-  return request<{ logins: string[] }>(`/api/contacts/logins${suffix}`).then((body) => body.logins);
+  return request<ContactLogins>(`/api/contacts/logins${suffix}`);
 }
 
 export function listContactCountries(): Promise<string[]> {
