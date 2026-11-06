@@ -25,6 +25,12 @@ _EMAIL = frozenset({"any", "has", "missing"})
 _KIND = frozenset({"any", "personal", "other"})
 _LINKEDIN = frozenset({"any", "has", "missing"})
 
+# GET /api/contacts/logins returns at most this many usernames. Past it the
+# response says so, and the UI tells the user to narrow the filters.
+LOGIN_CAP = 5000
+# CSV export reads candidates and their evidence this many rows at a time.
+EXPORT_BATCH = 200
+
 
 class StatusCreate(BaseModel):
     label: str = Field(min_length=1, max_length=40)
@@ -56,7 +62,7 @@ def _clean_label(label: str) -> str:
 
 async def _statuses(db) -> list[dict]:
     cursor = db.outreach_statuses.find({}).sort([("position", 1), ("label", 1)])
-    return await cursor.to_list(None)
+    return [document async for document in cursor]
 
 
 def _public_status(document: dict) -> dict:
@@ -307,13 +313,17 @@ async def list_contact_logins(
         email_kind=email_kind,
         linkedin=linkedin,
     )
-    cursor = db.candidates.find(query, {"login": 1}).sort(_CANDIDATE_SORT)
-    logins = []
-    for candidate in await cursor.to_list(None):
+    cursor = db.candidates.find(query, {"login": 1}).sort(_CANDIDATE_SORT).limit(LOGIN_CAP + 1)
+    logins: list[str] = []
+    fetched = 0
+    async for candidate in cursor:
+        fetched += 1
         login = _text(candidate.get("login"))
-        if login:
+        if login and len(logins) < LOGIN_CAP:
             logins.append(login)
-    return {"logins": logins, "total": len(logins)}
+    truncated = fetched > LOGIN_CAP
+    total = await db.candidates.count_documents(query) if truncated else len(logins)
+    return {"logins": logins, "total": total, "truncated": truncated}
 
 
 async def _apply_status(db, logins: list[str], status: str | None) -> int:
@@ -360,14 +370,24 @@ async def export_contacts(body: ContactExport, request: Request) -> StreamingRes
         for document in await _statuses(db)
     }
 
-    async def lines():
-        yield format_csv_row(COLUMNS)
-        cursor = db.candidates.find({"login": {"$in": body.logins}}).sort(_CANDIDATE_SORT)
-        candidates = await cursor.to_list(None)
+    async def rows(candidates: list[dict]):
         grouped = await evidence_by_user(db, candidate_user_ids(candidates))
         for candidate in candidates:
             row = build_row(candidate, evidence_for(grouped, candidate), status_labels=labels)
             yield format_csv_row([row[column] for column in COLUMNS])
+
+    async def lines():
+        yield format_csv_row(COLUMNS)
+        cursor = db.candidates.find({"login": {"$in": body.logins}}).sort(_CANDIDATE_SORT)
+        pending: list[dict] = []
+        async for candidate in cursor:
+            pending.append(candidate)
+            if len(pending) >= EXPORT_BATCH:
+                async for line in rows(pending):
+                    yield line
+                pending = []
+        async for line in rows(pending):
+            yield line
 
     return StreamingResponse(
         lines(),

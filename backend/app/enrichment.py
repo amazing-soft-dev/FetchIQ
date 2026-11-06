@@ -427,11 +427,12 @@ class EnrichmentService:
         return parse_utc_offset(html), parse_profile_emails(html)
 
     async def _contact_evidence(self, github_user_id: int) -> list[dict]:
-        return await self.db.contact_evidence.find({"github_user_id": github_user_id}).to_list(None)
+        cursor = self.db.contact_evidence.find({"github_user_id": github_user_id})
+        return [document async for document in cursor]
 
     async def _stored_kinds(self, github_user_id: int) -> set[str]:
         cursor = self.db.contact_evidence.find({"github_user_id": github_user_id}, {"kind": 1})
-        return {document["kind"] for document in await cursor.to_list(None) if document.get("kind")}
+        return {document["kind"] async for document in cursor if document.get("kind")}
 
     async def _add_contact(
         self,

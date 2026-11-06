@@ -79,6 +79,7 @@ export function ContactsBrowser() {
   const [bulkChoice, setBulkChoice] = useState("");
   const [newStatus, setNewStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -252,8 +253,13 @@ export function ContactsBrowser() {
     setBusy(true);
     setError(null);
     try {
-      const logins = await listContactLogins(query);
-      setSelected((current) => new Set([...current, ...logins]));
+      const result = await listContactLogins(query);
+      setSelected((current) => new Set([...current, ...result.logins]));
+      setNotice(
+        result.truncated
+          ? `Selected the first ${result.logins.length.toLocaleString()} of ${result.total.toLocaleString()} matching contacts. Narrow the filters to reach the rest.`
+          : null,
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not select matching contacts.");
     } finally {
@@ -395,6 +401,7 @@ export function ContactsBrowser() {
         </Button>
       </div>
       {error ? <p className="mb-3 text-sm text-danger">{error}</p> : null}
+      {notice ? <p className="mb-3 text-sm text-muted">{notice}</p> : null}
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -556,7 +563,14 @@ export function ContactsBrowser() {
             >
               Select all matching
             </Button>
-            <Button type="button" variant="secondary" onClick={() => setSelected(new Set())}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setSelected(new Set());
+                setNotice(null);
+              }}
+            >
               Clear
             </Button>
           </>

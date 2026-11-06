@@ -162,6 +162,34 @@ async def test_missing_email_is_skipped_and_a_refusal_continues(db) -> None:
     assert refused["status"] == "failed"
 
 
+async def test_queueing_reads_candidates_in_batches_and_keeps_positions(db, monkeypatch) -> None:
+    monkeypatch.setattr("app.campaigns.QUEUE_BATCH", 2)
+    await db.candidates.insert_many(
+        [
+            _candidate("ada", "ada@example.com", github_user_id=7, name="Ada Lovelace"),
+            _candidate("grace", "grace@example.com", github_user_id=8, name="Grace"),
+            _candidate("linus", None, github_user_id=9, name="Linus"),
+        ]
+    )
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=FakeMailer())
+    async with _http(app) as client:
+        created = await client.post(
+            "/api/campaigns",
+            json=_payload(logins=["ada", "missing", "grace", "linus", "zed"]),
+        )
+        assert created.status_code == 201
+        campaign_id = created.json()["id"]
+        await _drain(app, campaign_id)
+    rows = await db.campaign_recipients.find({"campaign_id": campaign_id}).to_list(10)
+    by_login = {row["login"]: row for row in sorted(rows, key=lambda row: row["position"])}
+    assert list(by_login) == ["ada", "missing", "grace", "linus", "zed"]
+    assert [row["position"] for row in by_login.values()] == [0, 1, 2, 3, 4]
+    assert by_login["missing"]["error"] == "Contact was not found."
+    assert by_login["linus"]["error"] == "No public email."
+    assert by_login["ada"]["status"] == "sent"
+    assert by_login["grace"]["status"] == "sent"
+
+
 async def test_authentication_failure_stops_before_the_next_recipient(db) -> None:
     await db.candidates.insert_many(
         [

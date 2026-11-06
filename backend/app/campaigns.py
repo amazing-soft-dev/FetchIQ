@@ -26,6 +26,10 @@ from app.mail import (
 log = logging.getLogger(__name__)
 
 ACTIVE = frozenset({"queued", "running", "paused"})
+
+# Candidates and their evidence are read in slices of this many logins when a
+# campaign is queued, so a 20,000-contact send never loads them all at once.
+QUEUE_BATCH = 500
 WAIT_STEP_SECONDS = 5.0
 CONNECTION_BACKOFF = (120, 300, 600, 900)
 INTERRUPTED = "Send was interrupted and was not retried."
@@ -430,33 +434,35 @@ async def queue_campaign(db, body) -> dict:
     active = await db.campaigns.count_documents({"status": {"$in": list(ACTIVE)}})
     if active:
         raise CampaignBusy("A message send is already in progress.")
-    candidates = await db.candidates.find({"login": {"$in": body.logins}}).to_list(None)
-    by_login = {
-        candidate["login"]: candidate
-        for candidate in candidates
-        if isinstance(candidate.get("login"), str)
-    }
-    grouped = await evidence_by_user(db, candidate_user_ids(list(by_login.values())))
     now = utcnow()
     campaign_id = str(uuid4())
     rows: list[dict] = []
     queued = 0
-    for position, login in enumerate(body.logins):
-        candidate = by_login.get(login)
-        if candidate is None:
-            rows.append(_recipient(campaign_id, position, login, None, None, "skipped", now))
-            rows[-1]["error"] = "Contact was not found."
-            continue
-        evidence = evidence_for(grouped, candidate)
-        email = contact_facts(candidate, evidence).get("public_email")
-        name = candidate.get("name") if isinstance(candidate.get("name"), str) else None
-        if not email:
-            row = _recipient(campaign_id, position, login, name, None, "skipped", now)
-            row["error"] = "No public email."
-            rows.append(row)
-            continue
-        rows.append(_recipient(campaign_id, position, login, name, str(email), "queued", now))
-        queued += 1
+    for start in range(0, len(body.logins), QUEUE_BATCH):
+        batch = body.logins[start : start + QUEUE_BATCH]
+        by_login: dict[str, dict] = {}
+        async for candidate in db.candidates.find({"login": {"$in": batch}}):
+            if isinstance(candidate.get("login"), str):
+                by_login[candidate["login"]] = candidate
+        grouped = await evidence_by_user(db, candidate_user_ids(list(by_login.values())))
+        for offset, login in enumerate(batch):
+            position = start + offset
+            candidate = by_login.get(login)
+            if candidate is None:
+                row = _recipient(campaign_id, position, login, None, None, "skipped", now)
+                row["error"] = "Contact was not found."
+                rows.append(row)
+                continue
+            evidence = evidence_for(grouped, candidate)
+            email = contact_facts(candidate, evidence).get("public_email")
+            name = candidate.get("name") if isinstance(candidate.get("name"), str) else None
+            if not email:
+                row = _recipient(campaign_id, position, login, name, None, "skipped", now)
+                row["error"] = "No public email."
+                rows.append(row)
+                continue
+            rows.append(_recipient(campaign_id, position, login, name, str(email), "queued", now))
+            queued += 1
     if queued == 0:
         raise NoRecipients("None of the selected contacts have a public email.")
     campaign = {
