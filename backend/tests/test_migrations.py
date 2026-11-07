@@ -136,3 +136,29 @@ async def test_startup_runs_migrations_then_serves(db) -> None:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/health")
     assert response.status_code == 200
+
+
+async def test_backfill_sources_marks_legacy_rows_as_github(fresh_database) -> None:
+    from app.migrations import backfill_sources
+
+    db = fresh_database()
+    await db.candidates.insert_many(
+        [
+            {"login": "ada", "github_user_id": 1},
+            {"login": "grace", "github_user_id": 2, "sources": ["hackernews"]},
+            {
+                "login": "linus",
+                "github_user_id": -3,
+                "source": "hackernews",
+                "sources": ["hackernews"],
+            },
+        ]
+    )
+    assert await backfill_sources(db) == 2
+    ada = await db.candidates.find_one({"login": "ada"})
+    assert ada["source"] == "github" and ada["sources"] == ["github"]
+    grace = await db.candidates.find_one({"login": "grace"})
+    assert grace["source"] == "github" and sorted(grace["sources"]) == ["github", "hackernews"]
+    linus = await db.candidates.find_one({"login": "linus"})
+    assert linus["source"] == "hackernews" and linus["sources"] == ["hackernews"]
+    assert await backfill_sources(db) == 0
