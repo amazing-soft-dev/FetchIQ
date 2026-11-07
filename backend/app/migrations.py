@@ -60,10 +60,26 @@ async def collapse_duplicate_logins(db: Database) -> int:
     return len(drop)
 
 
+async def backfill_sources(db: Database) -> int:
+    """Mark candidates without a ``source`` as GitHub ones.
+
+    ``source`` is where the username and profile link point; ``sources`` lists
+    every origin that contributed evidence. Adding to ``sources`` rather than
+    setting it keeps an origin another pipeline recorded before this step ran.
+    """
+
+    result = await db.candidates.update_many(
+        {"source": {"$exists": False}},
+        {"$set": {"source": "github"}, "$addToSet": {"sources": "github"}},
+    )
+    return int(result.modified_count)
+
+
 MIGRATIONS: Steps = (
     (1, "collapse duplicate candidate logins", collapse_duplicate_logins),
     (2, "backfill contact filter flags", backfill_contact_filters),
     (3, "recount job counters", recount_jobs),
+    (4, "backfill candidate sources", backfill_sources),
 )
 
 LATEST = MIGRATIONS[-1][0]
