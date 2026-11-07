@@ -130,6 +130,9 @@ function contactParams(query: ContactQuery, includePage: boolean): URLSearchPara
   if (query.job_id) {
     params.set("job_id", query.job_id);
   }
+  if (query.source && query.source !== "any") {
+    params.set("source", query.source);
+  }
   return params;
 }
 

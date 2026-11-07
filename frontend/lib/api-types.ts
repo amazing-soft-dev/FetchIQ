@@ -687,6 +687,8 @@ export interface components {
         ContactOut: {
             /** Country */
             country: string | null;
+            /** Display Login */
+            display_login: string;
             /** Email Kinds */
             email_kinds: ("personal" | "other")[];
             /** Job Id */
@@ -705,6 +707,13 @@ export interface components {
             profile_url: string;
             /** Public Email */
             public_email: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "github" | "hackernews";
+            /** Sources */
+            sources: ("github" | "hackernews")[];
         };
         /** ContactPageOut */
         ContactPageOut: {
@@ -1218,6 +1227,7 @@ export interface operations {
                 country?: string[];
                 q?: string;
                 job_id?: string;
+                source?: string;
             };
             header?: never;
             path?: never;
@@ -1317,6 +1327,7 @@ export interface operations {
                 country?: string[];
                 q?: string;
                 job_id?: string;
+                source?: string;
             };
             header?: never;
             path?: never;

@@ -34,6 +34,8 @@ _COUNTRY_QUERY = Query(default=[])
 _EMAIL = frozenset({"any", "has", "missing"})
 _KIND = frozenset({"any", "personal", "other"})
 _LINKEDIN = frozenset({"any", "has", "missing"})
+_SOURCE = frozenset({"any", "github", "hackernews"})
+_KNOWN_SOURCES = ("github", "hackernews")
 
 # GET /api/contacts/logins returns at most this many usernames. Past it the
 # response says so, and the UI tells the user to narrow the filters.
@@ -134,6 +136,7 @@ def _candidate_query(
     email: str = "any",
     email_kind: str = "any",
     linkedin: str = "any",
+    source: str = "any",
 ) -> dict:
     parts: list[dict] = []
     if job_id:
@@ -166,6 +169,8 @@ def _candidate_query(
         parts.append({"has_linkedin": True})
     elif linkedin == "missing":
         parts.append({"has_linkedin": False})
+    if source != "any":
+        parts.append({"sources": source})
     if not parts:
         return {}
     if len(parts) == 1:
@@ -179,6 +184,19 @@ def _text(value: object) -> str | None:
     return None
 
 
+def _sources(candidate: dict) -> tuple[str, list[str]]:
+    """``source`` and ``sources`` of a candidate. Rows written before migration 4 are GitHub."""
+
+    source = candidate.get("source")
+    if source not in _KNOWN_SOURCES:
+        source = "github"
+    stored = candidate.get("sources")
+    listed = [item for item in _KNOWN_SOURCES if isinstance(stored, list) and item in stored]
+    if source not in listed:
+        listed.insert(0, source)
+    return source, listed
+
+
 def _present(candidate: dict) -> dict:
     kinds: list[str] = []
     if candidate.get("personal"):
@@ -186,8 +204,14 @@ def _present(candidate: dict) -> dict:
     if candidate.get("other"):
         kinds.append("other")
     status = candidate.get("outreach_status") or None
+    source, sources = _sources(candidate)
+    login = candidate.get("login") or ""
+    display = candidate.get("hn_username") if source == "hackernews" else None
     return {
-        "login": candidate.get("login") or "",
+        "login": login,
+        "display_login": _text(display) or login,
+        "source": source,
+        "sources": sources,
         "name": candidate.get("name"),
         "profile_url": candidate.get("profile_url") or "",
         "public_email": _text(candidate.get("public_email")),
@@ -200,8 +224,15 @@ def _present(candidate: dict) -> dict:
     }
 
 
-def _check_filters(email: str, email_kind: str, linkedin: str, page: int, page_size: int) -> None:
-    if email not in _EMAIL or email_kind not in _KIND or linkedin not in _LINKEDIN:
+def _check_filters(
+    email: str, email_kind: str, linkedin: str, page: int, page_size: int, source: str = "any"
+) -> None:
+    if (
+        email not in _EMAIL
+        or email_kind not in _KIND
+        or linkedin not in _LINKEDIN
+        or source not in _SOURCE
+    ):
         raise HTTPException(status_code=422, detail="unknown contact filter")
     if page < 1:
         raise HTTPException(status_code=422, detail="page must be at least 1")
@@ -271,8 +302,9 @@ async def list_contacts(
     country: list[str] = _COUNTRY_QUERY,
     q: str = Query(default=""),
     job_id: str = Query(default=""),
+    source: str = Query(default="any"),
 ) -> dict:
-    _check_filters(email, email_kind, linkedin, page, page_size)
+    _check_filters(email, email_kind, linkedin, page, page_size, source)
     db = request.app.state.db
     query = _candidate_query(
         q=q,
@@ -282,6 +314,7 @@ async def list_contacts(
         email=email,
         email_kind=email_kind,
         linkedin=linkedin,
+        source=source,
     )
     skip = (page - 1) * page_size
     total = await db.candidates.count_documents(query)
@@ -311,8 +344,9 @@ async def list_contact_logins(
     country: list[str] = _COUNTRY_QUERY,
     q: str = Query(default=""),
     job_id: str = Query(default=""),
+    source: str = Query(default="any"),
 ) -> dict:
-    _check_filters(email, email_kind, linkedin, 1, 25)
+    _check_filters(email, email_kind, linkedin, 1, 25, source)
     db = request.app.state.db
     query = _candidate_query(
         q=q,
@@ -322,6 +356,7 @@ async def list_contact_logins(
         email=email,
         email_kind=email_kind,
         linkedin=linkedin,
+        source=source,
     )
     cursor = db.candidates.find(query, {"login": 1}).sort(_CANDIDATE_SORT).limit(LOGIN_CAP + 1)
     logins: list[str] = []

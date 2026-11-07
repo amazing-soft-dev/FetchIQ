@@ -245,6 +245,8 @@ _OBSOLETE_CANDIDATE_FIELDS = {
 def _pending_candidate(job_id: str, item: dict[str, Any], profile_url: str, now) -> dict[str, Any]:
     return {
         "job_id": job_id,
+        "source": "github",
+        "sources": ["github"],
         "github_user_id": item["id"],
         "login": item["login"],
         "profile_url": profile_url,

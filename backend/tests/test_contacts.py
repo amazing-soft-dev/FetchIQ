@@ -374,3 +374,59 @@ async def test_contact_export_streams_in_batches_in_order(db, monkeypatch) -> No
         "user0",
     ]
     assert "https://www.linkedin.com/in/user1" in lines[4]
+
+
+@pytest.mark.asyncio
+async def test_contacts_filter_by_source(db) -> None:
+    await db.candidates.insert_many(
+        [
+            # Written before migration 4: no source fields at all.
+            _candidate("ada", github_user_id=7, last_checked_at=datetime(2024, 3, 1, tzinfo=UTC)),
+            _candidate(
+                "grace",
+                github_user_id=8,
+                source="github",
+                sources=["github", "hackernews"],
+                hn_username="grace_hn",
+                last_checked_at=datetime(2024, 2, 1, tzinfo=UTC),
+            ),
+            _candidate(
+                "hn:linus",
+                github_user_id=-9,
+                source="hackernews",
+                sources=["hackernews"],
+                hn_username="linus",
+                profile_url="https://news.ycombinator.com/user?id=linus",
+                last_checked_at=datetime(2024, 1, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    app, transport = await _client(db)
+    async with app.router.lifespan_context(app):
+        # The app applied migration 4 on start, so the legacy row now reads as GitHub.
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = await client.get("/api/contacts")
+            assert listed.status_code == 200
+            rows = {item["login"]: item for item in listed.json()["contacts"]}
+            assert rows["ada"]["source"] == "github"
+            assert rows["ada"]["sources"] == ["github"]
+            assert rows["ada"]["display_login"] == "ada"
+            assert rows["grace"]["sources"] == ["github", "hackernews"]
+            assert rows["grace"]["display_login"] == "grace"
+            assert rows["hn:linus"]["source"] == "hackernews"
+            assert rows["hn:linus"]["display_login"] == "linus"
+
+            github = await client.get("/api/contacts", params={"source": "github"})
+            assert [item["login"] for item in github.json()["contacts"]] == ["ada", "grace"]
+            hackernews = await client.get("/api/contacts", params={"source": "hackernews"})
+            assert [item["login"] for item in hackernews.json()["contacts"]] == [
+                "grace",
+                "hn:linus",
+            ]
+            logins = await client.get("/api/contacts/logins", params={"source": "hackernews"})
+            assert logins.json()["logins"] == ["grace", "hn:linus"]
+
+            bad = await client.get("/api/contacts", params={"source": "reddit"})
+            assert bad.status_code == 422
+            bad_logins = await client.get("/api/contacts/logins", params={"source": "reddit"})
+            assert bad_logins.status_code == 422

@@ -41,6 +41,7 @@ export type ContactQuery = {
   country?: string[];
   q?: string;
   job_id?: string;
+  source?: "any" | "github" | "hackernews";
 };
 
 export const UNITED_STATES = "United States";
