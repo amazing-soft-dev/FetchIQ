@@ -9,6 +9,7 @@ import { exportHref } from "../lib/api";
 import { ACTIVE_JOB_STATUSES, useJob, useJobAction, useJobAnalysis } from "../lib/queries";
 import type { Job, JobStatus } from "../lib/types";
 import { cn } from "../lib/utils";
+import { HackerNewsJobDetails } from "./HackerNewsJobDetails";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 
@@ -36,7 +37,10 @@ export function JobPanel({
   const router = useRouter();
   const jobQuery = useJob(jobId, { initialData: initialJob });
   const job = jobQuery.data ?? null;
-  const analysisQuery = useJobAnalysis(jobId, job?.status);
+  const hackerNews = job?.kind === "hackernews";
+  const searchHref = hackerNews ? "/search/hacker-news" : "/search/github";
+  // The analysis describes GitHub slices and windows; a Hacker News job has none.
+  const analysisQuery = useJobAnalysis(jobId, hackerNews ? undefined : job?.status);
   const shownAnalysis = analysisQuery.data ?? null;
   const action = useJobAction(jobId);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -50,7 +54,7 @@ export function JobPanel({
     try {
       await action.mutateAsync(kind);
       if (kind === "cancel") {
-        router.push("/");
+        router.push(searchHref);
       }
     } catch (reason) {
       setActionError(message(reason, "Could not update the job."));
@@ -61,11 +65,13 @@ export function JobPanel({
     <section className="rounded-panel border border-line bg-white p-5 shadow-panel">
       <div className="mb-4">
         <p className="text-xs font-medium tracking-wide text-muted uppercase">
-          <Link href="/" className="text-muted hover:text-ink">
+          <Link href={searchHref} className="text-muted hover:text-ink">
             New search
           </Link>
         </p>
-        <h1 className="mt-1 text-lg font-semibold tracking-tight">Job status</h1>
+        <h1 className="mt-1 text-lg font-semibold tracking-tight">
+          {hackerNews ? "Hacker News search" : "Job status"}
+        </h1>
       </div>
       {error ? <p className="mb-4 text-sm text-danger">{error}</p> : null}
       {job ? (
@@ -112,6 +118,7 @@ export function JobPanel({
             </ul>
           ) : null}
           {job.error ? <p className="mt-4 text-sm text-danger">{job.error}</p> : null}
+          {hackerNews ? <HackerNewsJobDetails job={job} /> : null}
           {job.overlap_preview && job.overlap_preview.fresh > 0 && job.status === "queued" ? (
             <div className="mt-4 rounded-control border border-line bg-header px-3 py-3 text-sm">
               <p>
@@ -200,8 +207,9 @@ export function JobPanel({
           {job.counts.discovered > 0 ? (
             <>
               <p className="mt-4 text-sm text-muted">
-                {job.counts.enriched} of {job.counts.discovered} profiles enriched. Profile name,
-                location, public email, and UTC offset are filled as each profile is enriched.
+                {hackerNews
+                  ? `${job.counts.discovered} posts stored as contacts. Location, email and LinkedIn come from each post; a linked GitHub profile fills the name and company when it is looked up.`
+                  : `${job.counts.enriched} of ${job.counts.discovered} profiles enriched. Profile name, location, public email, and UTC offset are filled as each profile is enriched.`}
               </p>
               <p className="mt-2 text-sm">
                 <Link href={`/contacts?job_id=${job.id}`}>Review these contacts</Link>

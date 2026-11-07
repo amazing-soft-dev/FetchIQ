@@ -1,7 +1,45 @@
 import { describe, expect, it } from "vitest";
 
-import { messageDraftError, searchCriteriaError } from "./schemas";
-import type { SearchCriteria } from "./types";
+import { hackerNewsCriteriaError, messageDraftError, searchCriteriaError } from "./schemas";
+import { emptyHackerNewsCriteria, type SearchCriteria } from "./types";
+
+describe("hackerNewsCriteriaError", () => {
+  it("accepts the defaults and filled-in filters", () => {
+    expect(hackerNewsCriteriaError(emptyHackerNewsCriteria())).toBeNull();
+    expect(
+      hackerNewsCriteriaError({
+        months_back: 24,
+        countries: ["Portugal"],
+        keywords: ["rust"],
+        remote_only: true,
+        github_lookup: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("bounds months back to whole numbers from 1 to 24", () => {
+    const message = "Months back must be a whole number from 1 to 24.";
+    expect(hackerNewsCriteriaError({ ...emptyHackerNewsCriteria(), months_back: 0 })).toBe(message);
+    expect(hackerNewsCriteriaError({ ...emptyHackerNewsCriteria(), months_back: 25 })).toBe(
+      message,
+    );
+    expect(hackerNewsCriteriaError({ ...emptyHackerNewsCriteria(), months_back: 1.5 })).toBe(
+      message,
+    );
+  });
+
+  it("caps keywords", () => {
+    expect(
+      hackerNewsCriteriaError({ ...emptyHackerNewsCriteria(), keywords: ["x".repeat(51)] }),
+    ).toBe("Keywords must be 50 characters or fewer.");
+    expect(
+      hackerNewsCriteriaError({
+        ...emptyHackerNewsCriteria(),
+        keywords: Array.from({ length: 21 }, (_, index) => `k${index}`),
+      }),
+    ).toBe("Use at most 20 keywords.");
+  });
+});
 
 const criteria: SearchCriteria = {
   countries: ["US"],

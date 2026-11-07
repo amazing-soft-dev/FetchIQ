@@ -263,6 +263,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/hackernews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Hackernews Job
+         * @description Queue a Hacker News search. Start it with ``POST /jobs/{id}/start`` as usual.
+         */
+        post: operations["create_hackernews_job_api_jobs_hackernews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -750,10 +770,83 @@ export interface components {
             /** Us States */
             us_states: string[];
         };
+        /** GitHubLookups */
+        GitHubLookups: {
+            /** Done */
+            done: number;
+            /** Errors */
+            errors: number;
+            /** Missing */
+            missing: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HackerNewsCriteria
+         * @description What a Hacker News search reads and keeps.
+         *
+         *     ``months_back`` is how many "Who wants to be hired?" threads to read, newest
+         *     first. The filters are optional: empty ``countries`` and ``keywords`` and a
+         *     false ``remote_only`` keep every post that has a contact. ``github_lookup``
+         *     reads the GitHub profile a post links when the post has no personal email.
+         */
+        "HackerNewsCriteria-Input": {
+            /** Countries */
+            countries?: string[];
+            /**
+             * Github Lookup
+             * @default true
+             */
+            github_lookup: boolean;
+            /** Keywords */
+            keywords?: string[];
+            /**
+             * Months Back
+             * @default 1
+             */
+            months_back: number;
+            /**
+             * Remote Only
+             * @default false
+             */
+            remote_only: boolean;
+        };
+        /**
+         * HackerNewsCriteria
+         * @description What a Hacker News search reads and keeps.
+         *
+         *     ``months_back`` is how many "Who wants to be hired?" threads to read, newest
+         *     first. The filters are optional: empty ``countries`` and ``keywords`` and a
+         *     false ``remote_only`` keep every post that has a contact. ``github_lookup``
+         *     reads the GitHub profile a post links when the post has no personal email.
+         */
+        "HackerNewsCriteria-Output": {
+            /** Countries */
+            countries: string[];
+            /**
+             * Github Lookup
+             * @default true
+             */
+            github_lookup: boolean;
+            /** Keywords */
+            keywords: string[];
+            /**
+             * Months Back
+             * @default 1
+             */
+            months_back: number;
+            /**
+             * Remote Only
+             * @default false
+             */
+            remote_only: boolean;
+        };
+        /** HackerNewsJobCreate */
+        HackerNewsJobCreate: {
+            criteria: components["schemas"]["HackerNewsCriteria-Input"];
         };
         /** JobCounts */
         JobCounts: {
@@ -782,15 +875,22 @@ export interface components {
             counts: components["schemas"]["JobCounts"];
             /** Created At */
             created_at: string | null;
-            criteria: components["schemas"]["SearchCriteria-Output"];
+            criteria: components["schemas"]["SearchCriteria-Output"] | null;
             /** Error */
             error: string | null;
+            github_lookups: components["schemas"]["GitHubLookups"];
+            hackernews_criteria: components["schemas"]["HackerNewsCriteria-Output"] | null;
             /** Id */
             id: string;
             /** Incomplete */
             incomplete: boolean;
             /** Incomplete Reasons */
             incomplete_reasons: string[];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "github" | "hackernews";
             overlap_preview: components["schemas"]["OverlapPreview"] | null;
             request_budget: components["schemas"]["RequestBudget"];
             /**
@@ -798,6 +898,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "paused" | "incomplete" | "succeeded" | "failed" | "cancelled";
+            /** Threads */
+            threads: components["schemas"]["ThreadReport"][];
             /** Updated At */
             updated_at: string | null;
         };
@@ -807,6 +909,11 @@ export interface components {
             created_at: string | null;
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "github" | "hackernews";
             /**
              * Status
              * @enum {string}
@@ -1006,6 +1113,30 @@ export interface components {
         StatusUpdate: {
             /** Status */
             status?: string | null;
+        };
+        /**
+         * ThreadReport
+         * @description One Hacker News thread a job read, with what became of its posts.
+         */
+        ThreadReport: {
+            /** Filtered */
+            filtered: number;
+            /** Id */
+            id: number;
+            /** Merged */
+            merged: number;
+            /** Posts */
+            posts: number;
+            /** Skipped */
+            skipped: number;
+            /** Stored */
+            stored: number;
+            /** Title */
+            title: string;
+            /** Unchanged */
+            unchanged: number;
+            /** Url */
+            url: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1513,6 +1644,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["JobCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_hackernews_job_api_jobs_hackernews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HackerNewsJobCreate"];
             };
         };
         responses: {

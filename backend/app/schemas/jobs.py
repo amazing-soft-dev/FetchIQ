@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 
-from app.models import JobStatus, SearchCriteria
+from app.models import HackerNewsCriteria, JobKind, JobStatus, SearchCriteria
 
 
 class RequestBudget(BaseModel):
@@ -31,10 +31,35 @@ class OverlapPreview(BaseModel):
     jobs: list[OverlapJob]
 
 
+class ThreadReport(BaseModel):
+    """One Hacker News thread a job read, with what became of its posts."""
+
+    id: int
+    title: str
+    url: str
+    posts: int
+    stored: int
+    merged: int
+    unchanged: int
+    filtered: int
+    skipped: int
+
+
+class GitHubLookups(BaseModel):
+    done: int
+    missing: int
+    errors: int
+
+
 class JobOut(BaseModel):
     id: str
+    kind: JobKind
     status: JobStatus
-    criteria: SearchCriteria
+    # GitHub searches carry ``criteria``; Hacker News searches carry ``hackernews_criteria``.
+    criteria: SearchCriteria | None
+    hackernews_criteria: HackerNewsCriteria | None
+    threads: list[ThreadReport]
+    github_lookups: GitHubLookups
     incomplete: bool
     incomplete_reasons: list[str]
     counts: JobCounts
@@ -47,6 +72,7 @@ class JobOut(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
+    kind: JobKind
     status: JobStatus
     created_at: str | None
 

@@ -9,6 +9,8 @@ from app.db import utcnow
 from app.discovery import DiscoveryService
 from app.enrichment import EnrichmentService
 from app.github import RATE_LIMIT_STEP_SECONDS, GitHubClient
+from app.hackernews_job import KIND as HACKERNEWS
+from app.hackernews_job import HackerNewsJobService
 from app.lease import SWEEP_SECONDS, claim_stale, forget, heartbeat, lease_fields
 
 log = logging.getLogger(__name__)
@@ -170,19 +172,30 @@ class JobRunner:
         finally:
             forget(job_id)
 
+    async def _kind(self, job_id: str) -> str:
+        job = await self.db.search_jobs.find_one({"_id": job_id}, {"kind": 1})
+        return str((job or {}).get("kind") or "github")
+
+    async def _run_github(self, job_id: str) -> bool:
+        """Discovery then enrichment. False when the user stopped the job in between."""
+
+        outcome = await DiscoveryService(self.db, self.github, sleeper=self.sleeper).run(job_id)
+        if outcome != "done":
+            return False
+        if not await self._wait_for_budget(job_id):
+            return False
+        outcome = await EnrichmentService(self.db, self.github, sleeper=self.sleeper).run(job_id)
+        return outcome == "done"
+
     async def _run_leased(self, job_id: str) -> None:
         try:
             if not await self._wait_for_budget(job_id):
                 return
-            outcome = await DiscoveryService(self.db, self.github, sleeper=self.sleeper).run(job_id)
-            if outcome != "done":
-                return
-            if not await self._wait_for_budget(job_id):
-                return
-            outcome = await EnrichmentService(self.db, self.github, sleeper=self.sleeper).run(
-                job_id
-            )
-            if outcome != "done":
+            if await self._kind(job_id) == HACKERNEWS:
+                service = HackerNewsJobService(self.db, self.github, sleeper=self.sleeper)
+                if await service.run(job_id) != "done":
+                    return
+            elif not await self._run_github(job_id):
                 return
             job = await self.db.search_jobs.find_one({"_id": job_id}, {"incomplete": 1})
             status = "incomplete" if job and job.get("incomplete") else "succeeded"

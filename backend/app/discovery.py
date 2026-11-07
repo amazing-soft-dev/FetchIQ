@@ -106,11 +106,14 @@ def build_user_query(criteria: SearchCriteria, start: date, end: date, location:
     return " ".join(parts)
 
 
-def new_job_document(criteria: SearchCriteria) -> dict[str, Any]:
+def new_job_document(criteria: SearchCriteria | None, *, kind: str = "github") -> dict[str, Any]:
+    """A queued job. ``criteria`` is the GitHub search; a Hacker News job passes None."""
+
     now = utcnow()
     return {
         "_id": str(uuid4()),
-        "criteria": criteria.model_dump(),
+        "kind": kind,
+        "criteria": criteria.model_dump() if criteria is not None else None,
         "status": "queued",
         "control": None,
         "incomplete": False,

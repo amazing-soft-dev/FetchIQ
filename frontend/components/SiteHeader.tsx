@@ -2,19 +2,32 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Search, Users } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { ChevronDown, Search, Users } from "lucide-react";
 
 import { cn } from "../lib/utils";
 import { SearchStatusLink } from "./SearchStatusLink";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
-const links = [
-  { href: "/", label: "Search", icon: Search },
-  { href: "/contacts", label: "Contacts", icon: Users },
-];
+export const SEARCH_PAGES = [
+  { href: "/search/github", label: "GitHub profiles" },
+  { href: "/search/hacker-news", label: "Hacker News" },
+] as const;
+
+const itemClass =
+  "inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-sm text-muted hover:bg-hover hover:text-ink";
+const activeClass = "bg-white text-ink shadow-[0_1px_2px_rgba(20,20,30,0.06)]";
 
 export function SiteHeader() {
   const pathname = usePathname();
+  const router = useRouter();
+  const searching = pathname === "/" || pathname.startsWith("/search");
+  const contacts = pathname.startsWith("/contacts");
 
   return (
     <header className="sticky top-0 z-30 flex h-12 items-center justify-between border-b border-line bg-header px-4">
@@ -24,23 +37,31 @@ export function SiteHeader() {
       </Link>
       <nav className="flex items-center gap-1">
         <SearchStatusLink />
-        {links.map((link) => {
-          const active = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
-          const Icon = link.icon;
-          return (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-sm text-muted hover:bg-hover hover:text-ink",
-                active && "bg-white text-ink shadow-[0_1px_2px_rgba(20,20,30,0.06)]",
-              )}
-            >
-              <Icon className="size-4" />
-              {link.label}
-            </Link>
-          );
-        })}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className={cn(itemClass, searching && activeClass)}
+            aria-label="Choose a search"
+          >
+            <Search className="size-4" />
+            Search
+            <ChevronDown className="size-3.5" aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {SEARCH_PAGES.map((page) => (
+              <DropdownMenuItem
+                key={page.href}
+                className={cn(pathname === page.href && "font-medium")}
+                onSelect={() => router.push(page.href)}
+              >
+                {page.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Link href="/contacts" className={cn(itemClass, contacts && activeClass)}>
+          <Users className="size-4" />
+          Contacts
+        </Link>
       </nav>
     </header>
   );

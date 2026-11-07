@@ -749,6 +749,7 @@ class Stored:
     outcome: str
     previous_job_id: str | None = None
     moved: dict[str, int] | None = None
+    candidate_id: Any = None
 
 
 def _checked_at(value: object) -> datetime | None:
@@ -816,11 +817,13 @@ async def _insert(
     for login in (contact.login, f"{COLLISION_PREFIX}{contact.login}"):
         fields = candidate_fields(contact, thread, stamp, job_id=job_id, login=login)
         try:
-            await db.candidates.insert_one({**fields, "created_at": stamp, "discovered_at": stamp})
+            result = await db.candidates.insert_one(
+                {**fields, "created_at": stamp, "discovered_at": stamp}
+            )
         except DuplicateKeyError:
             continue
         await _upsert_evidence(db, evidence_rows(contact), stamp)
-        return Stored("inserted")
+        return Stored("inserted", candidate_id=result.inserted_id)
     return Stored("skipped")
 
 
@@ -888,7 +891,7 @@ async def store_contact(
         # A new address means the old conversation does not apply, as in enrichment.
         update["$unset"] = {"outreach_status": ""}
     await db.candidates.update_one({"_id": existing["_id"]}, update)
-    return Stored("updated" if from_hn else "merged", previous_job, moved)
+    return Stored("updated" if from_hn else "merged", previous_job, moved, existing["_id"])
 
 
 async def store_thread(
