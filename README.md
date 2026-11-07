@@ -104,6 +104,21 @@ When a slice reports more than 1,000 hits, the job splits the date window. A sli
 
 `GET /api/jobs/{id}/export.csv` streams UTF-8 CSV. One row is emitted per GitHub user id. `include_no_contact=false` omits rows with no public contact. Cells that start with `=`, `+`, `-`, or `@` are prefixed so a spreadsheet does not treat them as formulas.
 
+## Hacker News contacts
+
+Developers also publish contact details in the monthly "Ask HN: Who wants to be hired?" threads posted by [whoishiring](https://news.ycombinator.com/submitted?id=whoishiring). `backend/scripts/scrape_hn.py` reads those threads into the same `candidates` and `contact_evidence` collections, so the contacts page, filters, CSV export and campaigns work on them unchanged.
+
+```
+python scripts/scrape_hn.py              # newest thread
+python scripts/scrape_hn.py --threads 3  # newest three months
+python scripts/scrape_hn.py --all        # every thread since 2011
+python scripts/scrape_hn.py --dry-run    # parse and print, write nothing
+```
+
+Threads are found through the official HN API and comments through the Algolia HN search API, with the item API as a fallback. Only top-level comments of a "Who wants to be hired?" thread are read; replies are discussion. "Who is hiring?" and freelancer threads are company posts and are skipped.
+
+Each post becomes one candidate with `source: "hackernews"`. `login` is the HN username and `profile_url` the HN profile. `github_user_id` holds a negative number derived from the username, since HN has no numeric ids and the evidence index needs one that cannot collide with a GitHub id. `location_raw`, `country`, `utc_offset`, `public_email`, `linkedin_url` and the email flags are filled the same way the GitHub pipeline fills them. The HN-only details live beside them: `hn_thread_id`, `hn_comment_id`, `hn_comment_url`, `hn_posted_at`, `role`, `remote`, `willing_to_relocate`, `technologies`, `resume_url`, `github_login` and `github_url`. Emails written as `name [at] example [dot] com` are read; placeholders and noreply addresses are dropped as everywhere else. A post with no email, URL or GitHub link is not stored. Duplicates follow the GitHub rules: a post first looks for the same HN account, then the GitHub candidate whose profile it links, then any record that already holds one of its addresses. A match stored within the last 14 days is left alone, and so is one that already has an email, unless the post adds a personal address, which then becomes the primary email. Otherwise the record is updated from the post; a GitHub record keeps its login and job and gains `hackernews` in its `sources`. The outreach status is cleared only when the primary email changes. An HN username already taken by an unrelated GitHub record is stored as `hn:<username>`.
+
 ## Messages
 
 The contacts page sends a plain-text message to the selected people who have a public email. That address is the recipient. The subject and body may contain `{{ first_name }}`, `{{ name }}`, `{{ login }}`, and `{{ email }}`. `first_name` is the first word of the display name, or the username when the name is missing. Any other placeholder is rejected.
