@@ -17,6 +17,7 @@ import {
   renameOutreachStatus,
   updateContactStatus,
 } from "../lib/api";
+import { SOURCE_OPTIONS, parseSource, sourceLabels } from "../lib/contacts";
 import { catalogKeys, useOutreachStatuses } from "../lib/queries";
 import type { Contact, ContactQuery, JobSummary, OutreachStatus } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -49,6 +50,7 @@ function readQuery(params: URLSearchParams): ContactQuery {
     country: params.getAll("country"),
     q: params.get("q") || "",
     job_id: params.get("job_id") || "",
+    source: parseSource(params.get("source")),
   };
 }
 
@@ -474,6 +476,12 @@ export function ContactsBrowser({
               { value: "missing", label: "Has none" },
             ]}
           />
+          <ChoiceSelect
+            label="Source"
+            value={query.source || "any"}
+            onValueChange={(value) => replace({ source: value === "any" ? null : value }, true)}
+            options={SOURCE_OPTIONS}
+          />
           <StatusMultiSelect
             options={[
               { id: "none", label: "Not set" },
@@ -615,6 +623,7 @@ export function ContactsBrowser({
                 />
               </th>
               <th className="px-3 py-2 font-medium">Username</th>
+              <th className="px-3 py-2 font-medium">Source</th>
               <th className="px-3 py-2 font-medium">Name</th>
               <th className="px-3 py-2 font-medium">Public email</th>
               <th className="px-3 py-2 font-medium">Kind</th>
@@ -627,13 +636,13 @@ export function ContactsBrowser({
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-3 py-6 text-muted" colSpan={9}>
+                <td className="px-3 py-6 text-muted" colSpan={10}>
                   Loading contacts…
                 </td>
               </tr>
             ) : contacts.length === 0 ? (
               <tr>
-                <td className="px-3 py-6 text-muted" colSpan={9}>
+                <td className="px-3 py-6 text-muted" colSpan={10}>
                   No contacts match these filters.
                 </td>
               </tr>
@@ -666,8 +675,15 @@ export function ContactsBrowser({
                     </td>
                     <td className="px-3 py-2">
                       <a href={contact.profile_url || `https://github.com/${contact.login}`}>
-                        {contact.login}
+                        {contact.display_login || contact.login}
                       </a>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="flex flex-wrap gap-1">
+                        {sourceLabels(contact).map((label) => (
+                          <Badge key={label}>{label}</Badge>
+                        ))}
+                      </span>
                     </td>
                     <td className="px-3 py-2">{contact.name || "—"}</td>
                     <td className="px-3 py-2">{contact.public_email || "—"}</td>

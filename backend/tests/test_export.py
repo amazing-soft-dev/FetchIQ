@@ -178,3 +178,9 @@ async def test_export_endpoint_sanitizes_and_filters_empty_contacts(db) -> None:
     filtered_rows = list(csv.reader(filtered.text.splitlines()))
     assert [row[0] for row in filtered_rows[1:]] == ["ada"]
     assert missing.status_code == 404
+
+
+def test_source_column_defaults_to_github() -> None:
+    assert COLUMNS[-1] == "source"
+    assert build_row({"login": "ada"}, [])["source"] == "github"
+    assert build_row({"login": "ada", "source": "hackernews"}, [])["source"] == "hackernews"

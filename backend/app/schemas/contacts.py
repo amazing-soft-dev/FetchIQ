@@ -17,8 +17,16 @@ class Deleted(BaseModel):
     deleted: str
 
 
+ContactSource = Literal["github", "hackernews"]
+
+
 class ContactOut(BaseModel):
     login: str
+    # The name to show: the HN username for a Hacker News contact, else the login.
+    display_login: str
+    # Where the login and profile link point, and every origin that contributed evidence.
+    source: ContactSource
+    sources: list[ContactSource]
     name: str | None
     profile_url: str
     public_email: str | None

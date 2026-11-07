@@ -40,6 +40,7 @@ COLUMNS = [
     "last_checked_at",
     "collection_status",
     "outreach_status",
+    "source",
 ]
 
 KIND_COLUMNS = {
@@ -199,6 +200,7 @@ def build_row(
         else (checked or ""),
         "collection_status": candidate.get("collection_status") or "",
         "outreach_status": _status_label(candidate.get("outreach_status"), status_labels),
+        "source": candidate.get("source") or "github",
     }
     return {column: "" if row[column] is None else str(row[column]) for column in COLUMNS}
 
