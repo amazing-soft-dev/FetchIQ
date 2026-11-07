@@ -8,7 +8,9 @@ from app.analysis import build_analysis, preview_overlap
 from app.db import isoformat, utcnow
 from app.discovery import new_job_document
 from app.export import stream_job_csv
-from app.models import SearchCriteria
+from app.hackernews_job import KIND as HACKERNEWS
+from app.hackernews_job import new_hackernews_job
+from app.models import HackerNewsCriteria, SearchCriteria
 from app.schemas import AnalysisOut, JobList, JobOut
 
 router = APIRouter(prefix="/api")
@@ -18,6 +20,17 @@ COUNT_KEYS = ("discovered", "enriched", "errors", "emails", "linkedin_without_em
 
 class JobCreate(BaseModel):
     criteria: SearchCriteria
+
+
+class HackerNewsJobCreate(BaseModel):
+    criteria: HackerNewsCriteria
+
+
+def job_kind(document: dict) -> str:
+    """``github`` for jobs written before ``kind`` existed."""
+
+    kind = document.get("kind")
+    return kind if kind == HACKERNEWS else "github"
 
 
 def _budget(document: dict | None) -> dict:
@@ -34,10 +47,17 @@ def public_job(document: dict) -> dict:
     """The job as the UI sees it. Counters come from the document; nothing else is read."""
 
     counts = document.get("counts") or {}
+    lookups = document.get("github_lookups") or {}
     return {
         "id": document["_id"],
+        "kind": job_kind(document),
         "status": document["status"],
-        "criteria": document["criteria"],
+        "criteria": document.get("criteria"),
+        "hackernews_criteria": document.get("hackernews_criteria"),
+        "threads": document.get("threads") or [],
+        "github_lookups": {
+            key: int(lookups.get(key) or 0) for key in ("done", "missing", "errors")
+        },
         "incomplete": bool(document.get("incomplete")),
         "incomplete_reasons": document.get("incomplete_reasons") or [],
         "counts": {key: int(counts.get(key) or 0) for key in COUNT_KEYS},
@@ -60,13 +80,14 @@ async def _load(db, job_id: str) -> dict:
 async def list_jobs(request: Request) -> dict:
     cursor = request.app.state.db.search_jobs.find(
         {},
-        {"status": 1, "created_at": 1},
+        {"status": 1, "created_at": 1, "kind": 1},
     ).sort([("created_at", -1)])
     documents = await cursor.to_list(100)
     return {
         "jobs": [
             {
                 "id": document["_id"],
+                "kind": job_kind(document),
                 "status": document.get("status"),
                 "created_at": isoformat(document.get("created_at")),
             }
@@ -84,10 +105,22 @@ async def create_job(body: JobCreate, request: Request) -> dict:
     return public_job(document)
 
 
+@router.post("/jobs/hackernews", status_code=201, response_model=JobOut)
+async def create_hackernews_job(body: HackerNewsJobCreate, request: Request) -> dict:
+    """Queue a Hacker News search. Start it with ``POST /jobs/{id}/start`` as usual."""
+
+    document = new_hackernews_job(body.criteria)
+    await request.app.state.db.search_jobs.insert_one(document)
+    return public_job(document)
+
+
 @router.get("/jobs/{job_id}/analysis", response_model=AnalysisOut)
 async def job_analysis(job_id: str, request: Request) -> dict:
     db = request.app.state.db
-    return await build_analysis(db, await _load(db, job_id))
+    document = await _load(db, job_id)
+    if job_kind(document) == HACKERNEWS:
+        raise HTTPException(status_code=404, detail="analysis is only for GitHub searches")
+    return await build_analysis(db, document)
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
@@ -165,6 +198,21 @@ async def cancel_job(job_id: str, request: Request) -> dict:
     return public_job(await _load(db, job_id))
 
 
+async def running_hackernews_conflict(db, document: dict) -> str | None:
+    """One Hacker News job at a time: two would read and store the same posts."""
+
+    other = await db.search_jobs.find_one(
+        {"_id": {"$ne": document["_id"]}, "status": "running", "kind": HACKERNEWS},
+        {"_id": 1},
+    )
+    if other is None:
+        return None
+    return (
+        f"Job {other['_id']} is already reading Hacker News. "
+        "Wait for it to finish, or pause or cancel it, before starting this one."
+    )
+
+
 async def running_country_conflict(db, document: dict) -> str | None:
     """Explain why this job must wait: another running job already searches a country of its own.
 
@@ -172,6 +220,8 @@ async def running_country_conflict(db, document: dict) -> str | None:
     profiles, so the second one is held until the first finishes, pauses or is cancelled.
     """
 
+    if job_kind(document) == HACKERNEWS:
+        return await running_hackernews_conflict(db, document)
     countries = [
         country
         for country in ((document.get("criteria") or {}).get("countries") or [])

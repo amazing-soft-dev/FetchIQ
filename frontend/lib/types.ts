@@ -8,8 +8,12 @@ type Schemas = components["schemas"];
 export type AccountAge = Schemas["AccountAge-Output"];
 export type SearchCriteria = Schemas["SearchCriteria-Output"];
 
+export type HackerNewsCriteria = Schemas["HackerNewsCriteria-Output"];
+
 export type Job = Schemas["JobOut"];
 export type JobStatus = Job["status"];
+export type JobKind = Job["kind"];
+export type ThreadReport = Schemas["ThreadReport"];
 export type JobSummary = Schemas["JobSummary"];
 export type OverlapJob = Schemas["OverlapJob"];
 export type OverlapPreview = Schemas["OverlapPreview"];
@@ -45,6 +49,14 @@ export type ContactQuery = {
 };
 
 export const UNITED_STATES = "United States";
+
+export const emptyHackerNewsCriteria = (): HackerNewsCriteria => ({
+  months_back: 1,
+  countries: [],
+  keywords: [],
+  remote_only: false,
+  github_lookup: true,
+});
 
 export const emptyCriteria = (): SearchCriteria => ({
   countries: [],

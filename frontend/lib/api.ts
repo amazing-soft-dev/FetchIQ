@@ -6,6 +6,7 @@ import type {
   ContactPage,
   ContactQuery,
   GeoCatalog,
+  HackerNewsCriteria,
   Job,
   JobSummary,
   OutreachStatus,
@@ -77,6 +78,13 @@ export function createPreset(name: string, criteria: SearchCriteria): Promise<Pr
 
 export function createJob(criteria: SearchCriteria): Promise<Job> {
   return request<Job>("/api/jobs", {
+    method: "POST",
+    body: JSON.stringify({ criteria }),
+  });
+}
+
+export function createHackerNewsJob(criteria: HackerNewsCriteria): Promise<Job> {
+  return request<Job>("/api/jobs/hackernews", {
     method: "POST",
     body: JSON.stringify({ criteria }),
   });

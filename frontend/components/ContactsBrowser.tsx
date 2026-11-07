@@ -498,7 +498,7 @@ export function ContactsBrowser({
               { value: "any", label: "Any search" },
               ...jobs.map((job) => ({
                 value: job.id,
-                label: `${job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · ${job.status}`,
+                label: `${job.kind === "hackernews" ? "HN · " : ""}${job.created_at ? job.created_at.slice(0, 16) : job.id.slice(0, 8)} · ${job.status}`,
               })),
             ]}
           />
