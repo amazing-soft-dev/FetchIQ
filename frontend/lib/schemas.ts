@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { SearchCriteria } from "./types";
+import type { HackerNewsCriteria, SearchCriteria } from "./types";
 
 const wholeAge = "Account age must be a whole number of years and months.";
 const ageRange = "Years must be 0 to 100 and months must be 0 to 11.";
@@ -45,6 +45,31 @@ export const searchCriteriaSchema = z.object({
 
 export function searchCriteriaError(criteria: SearchCriteria): string | null {
   const parsed = searchCriteriaSchema.safeParse(criteria);
+  if (parsed.success) {
+    return null;
+  }
+  return parsed.error.issues[0]?.message ?? "Check the search and try again.";
+}
+
+export const hackerNewsCriteriaSchema = z.object({
+  months_back: z.number().superRefine((months, ctx) => {
+    if (!Number.isInteger(months) || months < 1 || months > 24) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Months back must be a whole number from 1 to 24.",
+      });
+    }
+  }),
+  countries: z.array(z.string()).max(25, "Select at most 25 locations."),
+  keywords: z
+    .array(z.string().max(50, "Keywords must be 50 characters or fewer."))
+    .max(20, "Use at most 20 keywords."),
+  remote_only: z.boolean(),
+  github_lookup: z.boolean(),
+});
+
+export function hackerNewsCriteriaError(criteria: HackerNewsCriteria): string | null {
+  const parsed = hackerNewsCriteriaSchema.safeParse(criteria);
   if (parsed.success) {
     return null;
   }

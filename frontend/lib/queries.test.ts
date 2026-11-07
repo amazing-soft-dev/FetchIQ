@@ -14,7 +14,11 @@ import type { Job } from "./types";
 
 const job: Job = {
   id: "j1",
+  kind: "github",
   status: "running",
+  hackernews_criteria: null,
+  threads: [],
+  github_lookups: { done: 0, missing: 0, errors: 0 },
   criteria: {
     countries: ["Germany"],
     us_states: [],
@@ -58,12 +62,14 @@ describe("poll intervals", () => {
   it("picks the first active job from the list", () => {
     expect(
       activeJobSummary([
-        { id: "a", status: "succeeded", created_at: null },
-        { id: "b", status: "paused", created_at: null },
-        { id: "c", status: "running", created_at: null },
+        { id: "a", kind: "github", status: "succeeded", created_at: null },
+        { id: "b", kind: "github", status: "paused", created_at: null },
+        { id: "c", kind: "github", status: "running", created_at: null },
       ])?.id,
     ).toBe("b");
-    expect(activeJobSummary([{ id: "a", status: "failed", created_at: null }])).toBeUndefined();
+    expect(
+      activeJobSummary([{ id: "a", kind: "github", status: "failed", created_at: null }]),
+    ).toBeUndefined();
   });
 });
 

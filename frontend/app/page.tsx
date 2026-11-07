@@ -1,8 +1,6 @@
-import { SearchForm } from "../components/SearchForm";
-import { loadGeo, loadPresets } from "../lib/server-api";
+import { redirect } from "next/navigation";
 
-export default async function HomePage() {
-  // Fetched here so the form paints with its options; the client refetches if either is missing.
-  const [geo, presets] = await Promise.all([loadGeo(), loadPresets()]);
-  return <SearchForm initialGeo={geo} initialPresets={presets} />;
+// The GitHub search is the default. Each search kind has its own page under /search.
+export default function HomePage() {
+  redirect("/search/github");
 }
