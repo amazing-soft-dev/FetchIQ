@@ -9,7 +9,10 @@ from app.mail import (
     MailFailure,
     SmtpMailer,
     check_mailbox,
+    html_to_text,
+    is_html,
     placeholder_values,
+    render_body,
     render_template,
     save_copy,
     send_message,
@@ -32,6 +35,84 @@ def test_unknown_placeholder_is_rejected() -> None:
     assert unknown_placeholders("Hello {{ frist_name }}") == ["frist_name"]
     with pytest.raises(ValueError, match="frist_name"):
         render_template("Hello {{ frist_name }}", {"frist_name": "Ada"})
+
+
+_HTML_BODY = """<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Partnership</title>
+    <style>p { color: #333; }</style>
+  </head>
+  <body style="font-family: Arial, sans-serif;">
+    <p>Hi <strong>{{name}}</strong>,</p>
+    <p>
+      First line.<br />
+      Second line.
+    </p>
+    <ul>
+      <li><strong>One:</strong> first item.</li>
+      <li>Second item.</li>
+    </ul>
+    <p>
+      <a href="https://example.com/terms">Terms</a><br/>
+      <a href="mailto:ada@example.com">ada@example.com</a>
+    </p>
+  </body>
+</html>"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _HTML_BODY,
+        "<p>Hello</p>",
+        "Line one<br>Line two",
+        "Line one<br />Line two",
+        'See <a href="https://example.com">this</a>.',
+        "<DIV>Hello</DIV>",
+    ],
+)
+def test_markup_is_recognised_as_html(body: str) -> None:
+    assert is_html(body) is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Hello Ada",
+        "Write to me <a@example.com> or <b@example.com>.",
+        "{{ name }} <{{ email }}>",
+        "3 < 4 and 5 > 2",
+        "Use <placeholder> here.",
+    ],
+)
+def test_plain_text_is_not_recognised_as_html(body: str) -> None:
+    assert is_html(body) is False
+
+
+def test_values_are_escaped_only_in_an_html_body() -> None:
+    values = placeholder_values(name="Ada <b>& Co</b>", login="ada", email="ada@example.com")
+    assert render_body("<p>Hi {{ name }}</p>", values) == (
+        "<p>Hi Ada &lt;b&gt;&amp; Co&lt;/b&gt;</p>",
+        True,
+    )
+    assert render_body("Hi {{ name }}", values) == ("Hi Ada <b>& Co</b>", False)
+
+
+def test_html_becomes_readable_plain_text() -> None:
+    assert html_to_text(_HTML_BODY.replace("{{name}}", "Ada &amp; Co")) == (
+        "Hi Ada & Co,\n"
+        "\n"
+        "First line.\n"
+        "Second line.\n"
+        "\n"
+        "- One: first item.\n"
+        "- Second item.\n"
+        "\n"
+        "Terms (https://example.com/terms)\n"
+        "ada@example.com"
+    )
 
 
 class _Client:
@@ -471,6 +552,70 @@ def test_accepted_message_is_appended_once() -> None:
     assert folder == "INBOX.Sent"
     assert raw == smtp.messages[0].as_bytes()
     assert b"Message-ID:" in raw
+
+
+def test_html_message_carries_a_plain_text_alternative() -> None:
+    smtp = _Client()
+    imap = _Imap()
+    body = "<p>Hi <strong>Ada</strong>,</p><p>Café at 9?</p>"
+
+    error = send_message(
+        _settings(),
+        recipient="ada@example.com",
+        subject="Hello",
+        body=body,
+        html=True,
+        connect=lambda settings: smtp,
+        imap_connect=_imap(imap),
+    )
+    assert error is None
+    message = smtp.messages[0]
+    assert message.get_content_type() == "multipart/alternative"
+    plain, rich = message.iter_parts()
+    assert plain.get_content_type() == "text/plain"
+    assert plain.get_content().strip() == "Hi Ada,\n\nCafé at 9?"
+    assert rich.get_content_type() == "text/html"
+    assert rich.get_content().strip() == body
+    assert imap.appended[0][1] == message.as_bytes()
+
+
+def test_plain_message_stays_a_single_text_part() -> None:
+    smtp = _Client()
+
+    send_message(
+        _settings(),
+        recipient="ada@example.com",
+        subject="Hello",
+        body="<p>not marked as html</p>",
+        connect=lambda settings: smtp,
+        imap_connect=_imap(_Imap()),
+    )
+    message = smtp.messages[0]
+    assert message.get_content_type() == "text/plain"
+    assert message.get_content().strip() == "<p>not marked as html</p>"
+
+
+def test_mailer_files_an_html_copy_as_html() -> None:
+    imap = _Imap()
+    mailer = SmtpMailer(
+        _settings(),
+        connect=lambda settings: _SessionSmtp(),
+        imap_connect=lambda settings: imap,
+    )
+    assert (
+        mailer.send(recipient="a@example.com", subject="Hi", body="<p>One</p>", html=True) is None
+    )
+    mailer.save_copy(
+        recipient="a@example.com",
+        subject="Hi",
+        body="<p>One</p>",
+        sent_at=None,
+        html=True,
+    )
+    assert len(imap.appended) == 2
+    for _folder, raw in imap.appended:
+        assert b"multipart/alternative" in raw
+        assert b"text/html" in raw
 
 
 def test_refused_recipient_is_not_appended() -> None:

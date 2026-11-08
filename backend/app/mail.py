@@ -1,4 +1,4 @@
-"""Plain-text placeholders, one SMTP delivery, and a copy in Sent."""
+"""Placeholders, plain-text or HTML bodies, one SMTP delivery, and a copy in Sent."""
 
 import imaplib
 import re
@@ -9,6 +9,8 @@ import time
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
+from html import escape
+from html.parser import HTMLParser
 from typing import Protocol
 
 from app.config import Settings
@@ -19,6 +21,16 @@ SENDER_ERROR = "The mail server refused the sender address."
 DEFERRED_ERROR = "The mail server deferred this message."
 REJECTED_ERROR = "The mail server rejected this message."
 _TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+# A real tag, not an address in angle brackets such as ``<a@example.com>``.
+_HTML_TAG = re.compile(
+    r"<(?:!doctype\s+html|/?(?:html|head|body|p|div|span|br|hr|a|b|i|u|em|strong|ul|ol|li|"
+    r"table|tr|td|th|h[1-6]|img|font|center|blockquote|style))(?=[\s/>])[^<>]*>",
+    re.IGNORECASE,
+)
+_BLOCK_TAGS = frozenset(
+    {"p", "div", "ul", "ol", "table", "tr", "blockquote", "hr", "h1", "h2", "h3", "h4", "h5", "h6"}
+)
+_HIDDEN_TAGS = frozenset({"style", "script", "title"})
 _CONNECT_ATTEMPTS = 3
 _CONNECT_BACKOFF = (0.5, 1.0)
 _DROPPED_SESSION = (
@@ -59,8 +71,18 @@ class Mailer(Protocol):
     def check(self) -> dict:
         """Log in without sending a message."""
 
-    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
-        """Deliver one plain-text message. Return a Sent-copy error, if the copy failed."""
+    def send(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: bool = False,
+    ) -> str | None:
+        """Deliver one message. Return a Sent-copy error, if the copy failed.
+
+        ``html`` sends the body as HTML with a plain-text alternative.
+        """
 
     def save_copy(
         self,
@@ -69,6 +91,7 @@ class Mailer(Protocol):
         subject: str,
         body: str,
         sent_at: datetime | None,
+        html: bool = False,
     ) -> None:
         """File an already accepted message in Sent. Do not send it."""
 
@@ -98,15 +121,85 @@ def placeholder_values(*, name: str | None, login: str, email: str) -> dict[str,
     }
 
 
-def render_template(template: str, values: dict[str, str]) -> str:
+def render_template(template: str, values: dict[str, str], *, escape_html: bool = False) -> str:
     unknown = unknown_placeholders(template)
     if unknown:
         raise UnknownPlaceholder(unknown)
 
     def replace(match: re.Match[str]) -> str:
-        return values[match.group(1)]
+        value = values[match.group(1)]
+        return escape(value) if escape_html else value
 
     return _TOKEN.sub(replace, template)
+
+
+def is_html(body: str) -> bool:
+    """True when the body is written as HTML markup, not plain text."""
+
+    return bool(_HTML_TAG.search(body))
+
+
+def render_body(template: str, values: dict[str, str]) -> tuple[str, bool]:
+    """The filled-in body and whether it is HTML.
+
+    Names come from public profiles, so values are escaped inside an HTML body.
+    The template decides the format: a value can never turn plain text into HTML.
+    """
+
+    html = is_html(template)
+    return render_template(template, values, escape_html=html), html
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._hidden = 0
+        self._href: str | None = None
+        self._link_start = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _HIDDEN_TAGS:
+            self._hidden += 1
+        elif self._hidden:
+            return
+        elif tag == "br":
+            self.parts.append("\n")
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n\n")
+        elif tag == "a":
+            self._href = dict(attrs).get("href")
+            self._link_start = len(self.parts)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _HIDDEN_TAGS:
+            self._hidden = max(0, self._hidden - 1)
+        elif self._hidden:
+            return
+        elif tag == "a":
+            target = (self._href or "").strip().removeprefix("mailto:")
+            shown = " ".join("".join(self.parts[self._link_start :]).split())
+            if target and target != shown:
+                self.parts.append(f" ({target})")
+            self._href = None
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._hidden:
+            self.parts.append(re.sub(r"\s+", " ", data))
+
+
+def html_to_text(markup: str) -> str:
+    """The plain-text alternative of an HTML body, for clients that do not show HTML."""
+
+    parser = _TextExtractor()
+    parser.feed(markup)
+    parser.close()
+    lines = [" ".join(line.split()) for line in "".join(parser.parts).split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def mail_configured(settings: Settings) -> bool:
@@ -227,6 +320,7 @@ def _message(
     recipient: str,
     subject: str,
     body: str,
+    html: bool = False,
     sent_at: datetime | None = None,
 ) -> EmailMessage:
     message = EmailMessage()
@@ -238,7 +332,12 @@ def _message(
         stamp = stamp.replace(tzinfo=UTC)
     message["Date"] = format_datetime(stamp)
     message["Message-ID"] = make_msgid()
-    message.set_content(body)
+    if html:
+        # multipart/alternative: a client shows the last part it can render.
+        message.set_content(html_to_text(body))
+        message.add_alternative(body, subtype="html")
+    else:
+        message.set_content(body)
     return message
 
 
@@ -354,6 +453,7 @@ def save_copy(
     subject: str,
     body: str,
     sent_at: datetime | None,
+    html: bool = False,
     connect=None,
 ) -> None:
     """File one already accepted message. No SMTP connection is opened."""
@@ -365,6 +465,7 @@ def save_copy(
         recipient=recipient,
         subject=subject,
         body=body,
+        html=html,
         sent_at=sent_at,
     )
     append_message(settings, message, connect=connect, sent_at=sent_at)
@@ -376,6 +477,7 @@ def send_message(
     recipient: str,
     subject: str,
     body: str,
+    html: bool = False,
     connect=None,
     imap_connect=None,
 ) -> str | None:
@@ -384,7 +486,7 @@ def send_message(
     A Sent-copy failure is returned and does not stop the campaign.
     """
 
-    message = _message(settings, recipient=recipient, subject=subject, body=body)
+    message = _message(settings, recipient=recipient, subject=subject, body=body, html=html)
     _with_mailbox(settings, connect, lambda client: client.send_message(message))
     try:
         append_message(settings, message, connect=imap_connect)
@@ -433,10 +535,23 @@ class SmtpMailer:
     def check(self) -> dict:
         return check_mailbox(self.settings)
 
-    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+    def send(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: bool = False,
+    ) -> str | None:
         if not mail_configured(self.settings):
             raise MailFailure("Mail is not configured.", stop=True)
-        message = _message(self.settings, recipient=recipient, subject=subject, body=body)
+        message = _message(
+            self.settings,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            html=html,
+        )
         with self._lock:
             self._send_smtp(message)
             try:
@@ -452,6 +567,7 @@ class SmtpMailer:
         subject: str,
         body: str,
         sent_at: datetime | None,
+        html: bool = False,
     ) -> None:
         if not mail_configured(self.settings):
             raise CopyFailure("Mail is not configured.")
@@ -460,6 +576,7 @@ class SmtpMailer:
             recipient=recipient,
             subject=subject,
             body=body,
+            html=html,
             sent_at=sent_at,
         )
         with self._lock:

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { checkMailbox, createCampaign } from "../lib/api";
-import { renderMessage, unknownPlaceholders } from "../lib/message";
+import { isHtml, renderMessage, unknownPlaceholders } from "../lib/message";
 import {
   ACTIVE_CAMPAIGN_STATUSES,
   useActiveCampaign,
@@ -90,6 +90,7 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
     .map((login) => contacts.find((contact) => contact.login === login))
     .find((contact): contact is Contact => Boolean(contact));
   const unknown = unknownPlaceholders(subject, body);
+  const html = isHtml(body);
   const active = campaign !== null && ACTIVE_CAMPAIGN_STATUSES.includes(campaign.status);
   const loadedWithoutEmail = selected.filter((login) => {
     const contact = contacts.find((item) => item.login === login);
@@ -236,7 +237,8 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
           <DialogTitle className="pr-8 text-lg font-semibold tracking-tight">Message</DialogTitle>
           <DialogDescription className="mt-1 text-sm text-muted">
             Use {"{{ first_name }}"}, {"{{ name }}"}, {"{{ login }}"}, or {"{{ email }}"}. The
-            public email is the address the message is sent to.
+            public email is the address the message is sent to. A message written in HTML is sent
+            as HTML, with a plain-text copy for mail clients that do not show it.
           </DialogDescription>
           <div className="mt-4 flex flex-col gap-3">
             {shownError ? <p className="text-sm text-danger">{shownError}</p> : null}
@@ -314,9 +316,20 @@ export function MessageComposer({ open, selected, contacts, onClose, onDelivered
                   <div className="rounded-control border border-line bg-header p-3 text-sm">
                     <p className="text-muted">
                       Preview for {preview.login}. To: {preview.public_email || "no public email"}
+                      {html ? ". Sent as HTML." : null}
                     </p>
                     <p className="mt-2 font-medium">{renderMessage(subject, preview) || "Subject"}</p>
-                    <p className="mt-1 whitespace-pre-wrap">{renderMessage(body, preview) || "Message"}</p>
+                    {html ? (
+                      // An empty sandbox runs no script and cannot reach this page.
+                      <iframe
+                        title="Message preview"
+                        sandbox=""
+                        srcDoc={renderMessage(body, preview, { escapeHtml: true })}
+                        className="mt-2 h-72 w-full rounded-control border border-line bg-white"
+                      />
+                    ) : (
+                      <p className="mt-1 whitespace-pre-wrap">{renderMessage(body, preview) || "Message"}</p>
+                    )}
                   </div>
                 ) : (
                   <p className="text-sm text-muted">Select a contact on this page to preview the message.</p>
