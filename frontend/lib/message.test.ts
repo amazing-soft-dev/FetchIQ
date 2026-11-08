@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { placeholderValues, renderMessage, unknownPlaceholders } from "./message";
+import { isHtml, placeholderValues, renderMessage, unknownPlaceholders } from "./message";
 
 const contact = { name: "Ada Lovelace", login: "ada", public_email: "ada@example.com" };
 
@@ -58,5 +58,36 @@ describe("renderMessage", () => {
     expect(renderMessage("Hi {{first_name}} at {{company}}", contact)).toBe(
       "Hi Ada at {{company}}",
     );
+  });
+
+  it("escapes values for an HTML body only when asked", () => {
+    const tagged = { ...contact, name: "Ada <b>& Co</b>" };
+    expect(renderMessage("<p>{{ name }}</p>", tagged, { escapeHtml: true })).toBe(
+      "<p>Ada &lt;b&gt;&amp; Co&lt;/b&gt;</p>",
+    );
+    expect(renderMessage("{{ name }}", tagged)).toBe("Ada <b>& Co</b>");
+  });
+});
+
+describe("isHtml", () => {
+  it.each([
+    "<!DOCTYPE html><html><body>Hi</body></html>",
+    "<p>Hello</p>",
+    "Line one<br>Line two",
+    "Line one<br />Line two",
+    'See <a href="https://example.com">this</a>.',
+    "<DIV>Hello</DIV>",
+  ])("recognises markup: %s", (body) => {
+    expect(isHtml(body)).toBe(true);
+  });
+
+  it.each([
+    "Hello Ada",
+    "Write to me <a@example.com> or <b@example.com>.",
+    "{{ name }} <{{ email }}>",
+    "3 < 4 and 5 > 2",
+    "Use <placeholder> here.",
+  ])("leaves plain text alone: %s", (body) => {
+    expect(isHtml(body)).toBe(false);
   });
 });

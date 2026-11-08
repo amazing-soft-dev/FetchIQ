@@ -30,7 +30,35 @@ export function placeholderValues(contact: MessageContact): Record<string, strin
   };
 }
 
-export function renderMessage(template: string, contact: MessageContact): string {
+// Mirrors `_HTML_TAG` in backend/app/mail.py: a real tag, not `<a@example.com>`.
+const HTML_TAG =
+  /<(?:!doctype\s+html|\/?(?:html|head|body|p|div|span|br|hr|a|b|i|u|em|strong|ul|ol|li|table|tr|td|th|h[1-6]|img|font|center|blockquote|style))(?=[\s/>])[^<>]*>/i;
+
+/** True when the body is written as HTML. The server then sends it as HTML. */
+export function isHtml(body: string): boolean {
+  return HTML_TAG.test(body);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
+export function renderMessage(
+  template: string,
+  contact: MessageContact,
+  options: { escapeHtml?: boolean } = {},
+): string {
   const values = placeholderValues(contact);
-  return template.replace(TOKEN, (whole, name: string) => values[name] ?? whole);
+  return template.replace(TOKEN, (whole, name: string) => {
+    const value = values[name];
+    if (value === undefined) {
+      return whole;
+    }
+    return options.escapeHtml ? escapeHtml(value) : value;
+  });
 }

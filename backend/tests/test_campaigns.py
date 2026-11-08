@@ -43,12 +43,21 @@ class FakeMailer:
         self.sender_failures = sender_failures
         self.sender_detail = sender_detail
         self.sent: list[str] = []
+        self.bodies: list[tuple[str, bool]] = []
         self.copies: list[tuple] = []
+        self.copy_formats: list[bool] = []
 
     def configured(self) -> bool:
         return True
 
-    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+    def send(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: bool = False,
+    ) -> str | None:
         if self.connection_failures > 0:
             self.connection_failures -= 1
             raise MailFailure(
@@ -62,10 +71,20 @@ class FakeMailer:
         if recipient in self.refuse:
             raise MailFailure("The mail server refused this recipient.", stop=self.stop)
         self.sent.append(recipient)
+        self.bodies.append((body, html))
         return self.copy_error
 
-    def save_copy(self, *, recipient: str, subject: str, body: str, sent_at) -> None:
+    def save_copy(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        sent_at,
+        html: bool = False,
+    ) -> None:
         self.copies.append((recipient, subject, body, sent_at))
+        self.copy_formats.append(html)
 
 
 class GateMailer:
@@ -77,13 +96,28 @@ class GateMailer:
     def configured(self) -> bool:
         return True
 
-    def send(self, *, recipient: str, subject: str, body: str) -> str | None:
+    def send(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: bool = False,
+    ) -> str | None:
         self.started.set()
         assert self.release.wait(5)
         self.sent.append(recipient)
         return None
 
-    def save_copy(self, *, recipient: str, subject: str, body: str, sent_at) -> None:
+    def save_copy(
+        self,
+        *,
+        recipient: str,
+        subject: str,
+        body: str,
+        sent_at,
+        html: bool = False,
+    ) -> None:
         return None
 
 
@@ -160,6 +194,35 @@ async def test_missing_email_is_skipped_and_a_refusal_continues(db) -> None:
     assert ada["outreach_status"] == "message_sent"
     refused = await db.campaign_recipients.find_one({"login": "bad"})
     assert refused["status"] == "failed"
+
+
+async def test_html_body_is_sent_as_html_with_escaped_values(db) -> None:
+    await db.candidates.insert_many(
+        [_candidate("ada", "ada@example.com", github_user_id=7, name="Ada <b>& Co</b>")]
+    )
+    mailer = FakeMailer()
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with _http(app) as client:
+        created = await client.post(
+            "/api/campaigns",
+            json=_payload(body="<p>Hi <strong>{{ name }}</strong>,</p>"),
+        )
+        assert created.status_code == 201
+        await _drain(app, created.json()["id"])
+    assert mailer.bodies == [("<p>Hi <strong>Ada &lt;b&gt;&amp; Co&lt;/b&gt;</strong>,</p>", True)]
+
+
+async def test_plain_body_stays_plain_when_a_name_holds_markup(db) -> None:
+    await db.candidates.insert_many(
+        [_candidate("ada", "ada@example.com", github_user_id=7, name="<b>Ada</b>")]
+    )
+    mailer = FakeMailer()
+    app = create_app(settings=Settings(database_name="fetchiq_test"), db=db, mailer=mailer)
+    async with _http(app) as client:
+        created = await client.post("/api/campaigns", json=_payload(body="Hi {{ name }},"))
+        assert created.status_code == 201
+        await _drain(app, created.json()["id"])
+    assert mailer.bodies == [("Hi <b>Ada</b>,", False)]
 
 
 async def test_queueing_reads_candidates_in_batches_and_keeps_positions(db, monkeypatch) -> None:

@@ -23,6 +23,7 @@ from app.mail import (
     MailFailure,
     UnknownPlaceholder,
     placeholder_values,
+    render_body,
     render_template,
 )
 
@@ -285,12 +286,13 @@ class CampaignRunner:
         try:
             values = placeholder_values(name=name, login=login, email=email)
             subject = render_template(str(campaign.get("subject") or ""), values)
-            body = render_template(str(campaign.get("body") or ""), values)
+            body, html = render_body(str(campaign.get("body") or ""), values)
             copy_error = await asyncio.to_thread(
                 self.mailer.send,
                 recipient=email,
                 subject=subject,
                 body=body,
+                html=html,
             )
         except MailFailure as exc:
             detail = str(exc)[:300]
@@ -449,7 +451,7 @@ class CampaignRunner:
         name = recipient.get("name") if isinstance(recipient.get("name"), str) else None
         values = placeholder_values(name=name, login=login, email=email)
         subject = render_template(str(campaign.get("subject") or ""), values)
-        body = render_template(str(campaign.get("body") or ""), values)
+        body, html = render_body(str(campaign.get("body") or ""), values)
         sent_at = _aware(recipient.get("sent_at"))
         await asyncio.to_thread(
             self.mailer.save_copy,
@@ -457,6 +459,7 @@ class CampaignRunner:
             subject=subject,
             body=body,
             sent_at=sent_at,
+            html=html,
         )
         await self.db.campaign_recipients.update_one(
             {"_id": recipient["_id"]},
