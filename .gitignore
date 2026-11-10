@@ -228,3 +228,9 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
+
+# Claude
+.claude/
+
+# Cursor
+.cursor/
